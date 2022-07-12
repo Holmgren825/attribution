@@ -2,3 +2,8 @@ dask-worker-space
 data
 .ipynb_checkpoints
 __pycache__
+
+# Packages
+*.egg
+*.egg-info
+eggs
