@@ -1,3 +1,3 @@
 import attribution.funcs
-import attribution.verification
+import attribution.validation
 import attribution.plotting
