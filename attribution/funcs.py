@@ -1,4 +1,6 @@
 """Collection of helper functions useful when working with attribution."""
+from functools import partial
+from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -23,6 +25,8 @@ def bootstrap_fit(data, dist, n_resamples=1000):
     # We know how many results we need.
     results = np.zeros((n_resamples, 3))
     # Generate all the resamples before the loop.
+    # Generate integers in the range 0 to number of samples.
+    # And we want to fill an array with shape n_resamples x length of data.
     # This is basically sampling with replacement.
     indices = rng.integers(0, data.shape[0], (n_resamples, data.shape[0]))
 
@@ -31,6 +35,58 @@ def bootstrap_fit(data, dist, n_resamples=1000):
         res = dist.fit(data[..., inds])
         # Save fit params.
         results[i, :] = res
+    return results
+
+
+def dist_fit(dist, data, inds):
+    """Just a small helper function which can be distributed."""
+    return dist.fit(data[..., inds])
+
+
+def bootstrap_fit_mp(data, dist, n_resamples=9999, client=None):
+    """A very basic way to bootstrap the fit of a scipy.rv_continous distribution.
+    But tries to paralellize the process.
+
+    Arguments
+    ---------
+    data : ndarray
+    dist : scipy.rv_continous distribution
+    n_resamples : int
+        How many times should the data be resampled. Default: 1000
+    client : dask.distributed.Client
+        Use a dask client to map the tasks. Default: None
+
+    Returns
+    -------
+    results : ndarray(n_resamples, 3)
+    """
+
+    # Get the random number generator.
+    rng = np.random.default_rng()
+    # We know how many results we need.
+    results = np.zeros((n_resamples, 3))
+    # Generate all the resamples before the loop.
+    # Generate integers in the range 0 to number of samples.
+    # And we want to fill an array with shape n_resamples x length of data.
+    # This is basically sampling with replacement.
+    indices = rng.integers(0, data.shape[0], (n_resamples, data.shape[0]))
+
+    # Create a partial function for dist_fit
+    dist_fit_p = partial(dist_fit, dist, data)
+
+    # If we get a dask client, use it.
+    if client:
+        # Map tasks to the client.
+        results = client.map(dist_fit_p, indices)
+        # Gather the results
+        results = client.gather(results)
+    # If we don't have a client.
+    else:
+        # If no client is provided we simply use the standard multiprocessing pool.
+        # Likley faster on a single machine.
+        with Pool() as p:
+            results = p.map(dist_fit_p, indices)
+
     return results
 
 
