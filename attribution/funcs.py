@@ -147,7 +147,12 @@ def scale_distributions(fits_ci, reg_results, dist, temp=-1.2, percentiles=[5, 5
     dist_dict
     """
     # What distribution?
-    slopes = np.percentile(reg_results.coef_, percentiles)
+    # Did we pass an array of slopes
+    if isinstance(reg_results, np.ndarray):
+        slopes = np.percentile(reg_results, percentiles)
+    # if not we assume it is a regression object.
+    else:
+        slopes = np.percentile(reg_results.coef_, percentiles)
 
     # We store the scaled dists in a dict
     dist_dict = {}
@@ -163,15 +168,17 @@ def scale_distributions(fits_ci, reg_results, dist, temp=-1.2, percentiles=[5, 5
     return dist_dict
 
 
-def get_gmst(cube, window=4):
+def get_gmst(cube, path, window=4):
     """Get the gmst timeseries for the corresponding cube.
 
     Arguments
     ---------
     cube : iris.Cube
         Used to get the timespan.
+    path : string
+        Path to the gistemp data.
     window : int
-        Size of smoothing window
+        Size of smoothing window.
 
     Returns
     -------
@@ -179,8 +186,8 @@ def get_gmst(cube, window=4):
     """
     df = pd.read_csv(
         # Load in the dataset.
-        "./data/gistemp.txt",
-        sep="\s+",
+        path,
+        sep=r"\s+",
         header=2,
     )
     # Clean it a little

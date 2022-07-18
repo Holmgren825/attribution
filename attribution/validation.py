@@ -297,3 +297,40 @@ def get_scores(data, bins, score_bins):
     scores = score_bins[positions]
 
     return scores
+
+
+def check_dist_params(fits: np.ndarray, fits_ci: np.ndarray, buffer: float = 0.0):
+    """Check which which of a list of fit parameters lies within the confidence
+    interval of another fit.
+
+    Arguments:
+    ----------
+    fits : np.ndarray
+        m distribution parameters from n different distributions. Shape n x m.
+    fits_ci : np.ndarray
+        Confidence interval to check the fit distribution params against. Should have the shape 3 x m.
+    buffer : float
+        Allow the candidate fits to outside the reference CI by some percentage.
+    Returns:
+    --------
+    results : np.ndarray of bool
+    """
+    # Check the shapes
+    # We assume that the inputs have
+    if not fits.shape[1] == fits_ci.shape[1]:
+        raise ValueError("Incompatible number of dist parameters.")
+
+    # If we a clear to check the ranges.
+    # The fits should lie within the range of the CI.
+    # Maybe add some leeway here, that the values can be outside by some percentage?
+    # Get the buffers to add
+    buffers_low = np.abs(buffer * fits_ci[0, :])
+    buffers_high = np.abs(buffer * fits_ci[2, :])
+    # Check the candidates.
+    results = np.logical_and(
+        fits >= fits_ci[0, :] - buffers_low, fits <= fits_ci[2, :] + buffers_high
+    )
+    # All the params shoud be inside? Or any?
+    results = np.all(results, axis=1)
+
+    return results
