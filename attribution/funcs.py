@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 
-def calc_prob_ratio(data, threshold, temperature, regr_slope, dist, axis=None):
+def calc_prob_ratio(data, regr_slopes, threshold, temperature, dist, axis=None):
     """Calculate the probability ratio for an event of magnitude (threshold) under the
     current climate (data) and a counterfactual climate (shifted/scaled) according to the
     the relationship with GMST.
@@ -12,12 +12,12 @@ def calc_prob_ratio(data, threshold, temperature, regr_slope, dist, axis=None):
     ----------
     data : np.ndarray
         Data to perform the calculation on.
+    regr_slopes : numpy.ndarray(float) or float
+        Regression coefficient(s) between GMST and the variable.
     threshold : int/float
         Threshold value to the investigated event.
     temperature : float
         Temperature (GMST) used to shift/scale the distribution.
-    regr_slope : float
-        Regression coefficient between GMST and the variable.
     dist : scipy.stats.rv_contious
         Distribution used to fit the data.
     axis : int, optional
@@ -29,12 +29,21 @@ def calc_prob_ratio(data, threshold, temperature, regr_slope, dist, axis=None):
     """
 
     data = data.reshape(-1)
+    # Resample the data
+    # data = data[..., resample_index]
     # Fit a distribution
     fit = dist.fit(data)
 
     # Calculate the probability under the current climate.
     p1 = 1 - dist.cdf(threshold, *fit)
 
+    # Select a regression slope randomly - adds the variation of the
+    # varying regression to GMST.
+    if isinstance(regr_slopes, np.ndarray):
+        regr_slope = regr_slopes.mean()
+    # If not, we assume a single slope is passed.
+    else:
+        regr_slope = regr_slopes
     # Scale the distribution to create the counterfactual climate.
     scaled_fit = scale_dist_params(temperature, *fit, regr_slope)
     # Calculate the probability unde the counterfactual climate.
