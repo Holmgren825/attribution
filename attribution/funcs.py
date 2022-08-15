@@ -1,6 +1,7 @@
 """Collection of helper functions useful when working with attribution."""
 import numpy as np
 import pandas as pd
+from iris.exceptions import CoordinateNotFoundError
 
 
 def calc_prob_ratio(data, regr_slopes, threshold, temperature, dist, axis=None):
@@ -124,8 +125,13 @@ def get_gmst(cube, path, window=4):
 
     # Get the first and last year of the cube
     # Assumes that we have a coordinate year.
-    first_year = cube.coord("year").points[0]
-    last_year = cube.coord("year").points[-1]
+    try:
+        first_year = cube.coord("year").points[0]
+        last_year = cube.coord("year").points[-1]
+    except CoordinateNotFoundError:
+        first_year = cube.coord("season_year").points[0]
+        last_year = cube.coord("season_year").points[-1]
+
     # Select the timespan
     gmst = df[(df.Year >= first_year) & (df.Year <= last_year)].reset_index(drop=True)
 
