@@ -92,15 +92,15 @@ def shift_dist_params():
     pass
 
 
-def get_gmst(cube, path, window=4):
+def get_gmst(cube, path=None, window=4):
     """Get the gmst timeseries for the corresponding cube.
 
     Arguments
     ---------
     cube : iris.Cube
         Used to get the timespan.
-    path : string
-        Path to the gistemp data.
+    path : string, Optional.
+        Path to local gistemp data.
     window : int
         Size of smoothing window.
 
@@ -108,12 +108,21 @@ def get_gmst(cube, path, window=4):
     -------
     gmst_data :
     """
-    df = pd.read_csv(
-        # Load in the dataset.
-        path,
-        sep=r"\s+",
-        header=2,
-    )
+    url = "https://data.giss.nasa.gov/gistemp/graphs/graph_data/Global_Mean_Estimates_based_on_Land_and_Ocean_Data/graph.txt"
+    if not path:
+        df = pd.read_csv(
+            # Load in the dataset.
+            url,
+            sep=r"\s+",
+            header=2,
+        )
+    else:
+        df = pd.read_csv(
+            # Load in the dataset.
+            path,
+            sep=r"\s+",
+            header=2,
+        )
     # Clean it a little
     df = df.drop(0)
     df = df.reset_index(drop=True)
