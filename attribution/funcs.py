@@ -4,7 +4,9 @@ import pandas as pd
 from iris.exceptions import CoordinateNotFoundError
 
 
-def calc_prob_ratio(data, regr_slopes, threshold, temperature, dist, axis=None):
+def calc_prob_ratio(
+    data, regr_slopes, threshold, temperature, dist, scale_dist=True, axis=None
+):
     """Calculate the probability ratio for an event of magnitude (threshold) under the
     current climate (data) and a counterfactual climate (shifted/scaled) according to the
     the relationship with GMST.
@@ -21,6 +23,8 @@ def calc_prob_ratio(data, regr_slopes, threshold, temperature, dist, axis=None):
         Temperature (GMST) used to shift/scale the distribution.
     dist : scipy.stats.rv_contious
         Distribution used to fit the data.
+    scale_dist : bool
+        Whether to scale or shift the distribution. Default: True.
     axis : int, optional
         Needed for bootstrap?
 
@@ -41,20 +45,24 @@ def calc_prob_ratio(data, regr_slopes, threshold, temperature, dist, axis=None):
     # Select a regression slope randomly - adds the variation of the
     # varying regression to GMST.
     if isinstance(regr_slopes, np.ndarray):
-        regr_slope = regr_slopes.mean()
+        regr_slope = np.median(regr_slopes)
     # If not, we assume a single slope is passed.
     else:
         regr_slope = regr_slopes
-    # Scale the distribution to create the counterfactual climate.
-    scaled_fit = scale_dist_params(temperature, *fit, regr_slope)
+    if scale_dist:
+        # Scale the distribution to create the counterfactual climate.
+        adjusted_fit = scale_dist_params(temperature, *fit, regr_slope)
+    else:
+        # Shift the distribution.
+        adjusted_fit = shift_dist_params(temperature, *fit, regr_slope)
     # Calculate the probability unde the counterfactual climate.
-    p0 = 1 - dist.cdf(threshold, *scaled_fit)
+    p0 = 1 - dist.cdf(threshold, *adjusted_fit)
 
     return p1 / p0
 
 
 def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
-    """Scale the distribtuion by the location and scale parameters.
+    """Scale the distribution by the location and scale parameters.
     Could add sources here.
 
     Arguments
@@ -87,9 +95,34 @@ def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     return shape0, loc, scale
 
 
-# TODO
-def shift_dist_params():
-    pass
+def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
+    """Shift the distribution by the location and scale parameters.
+    Could add sources here.
+
+    Arguments
+    ---------
+    temperature : float
+        Temperature anomaly to scale the distribution to.
+    shape0 : float
+        Shape parameter. Unaffected.
+    loc0 : float
+        Location parameter of the distribution.
+    scale0 : float
+        Scale parameter of the distribution
+    regr_slope : float
+        Regression slope between GMST and data of the distribution.
+
+    Returns
+    -------
+    shape : float
+    loc : float
+    scale : float
+    """
+
+    # Only the location is shifted.
+    loc = loc0 + regr_slope * temperature
+
+    return shape0, loc, scale0
 
 
 def get_gmst(cube, path=None, window=4):
