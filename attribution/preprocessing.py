@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-
 import iris
 import iris.coord_categorisation
 from iris.time import PartialDateTime
@@ -91,6 +90,41 @@ def region_selection(cube, roi_points):
     return cube
 
 
+def load_gridclim(gridclim_path, time_range):
+    """Load the gridclim data.
+
+    Agruments:
+    ----------
+    griclim_path : string
+        Path to GridClim data.
+    time_range : array_like
+        Sequence of years describing the lower and upper range of the timespan.
+
+    Returns:
+    --------
+    gc_cube : iris.Cube.cube
+        Iris cube with GridClim data.
+    """
+    # This gives a list of files in the base path matchig the wildcard.
+    files = glob.glob(gridclim_path + "/*.nc")
+    # Create a cube.
+    cube = iris.load(files)
+
+    _ = iris.util.equalise_attributes(cube)
+
+    # We concat on time.
+    gc_cube = cube.concatenate_cube()
+
+    # Create a time constraint
+    time_constraint = iris.Constraint(
+        time=lambda cell: time_range[0] <= cell.point.year <= time_range[1]
+    )
+    # Extract time range.
+    gc_cube = gc_cube.extract(time_constraint)
+
+    return gc_cube
+
+
 def prepare_gridclim_cube(
     gridclim_path=None,
     gridclim_filename=None,
@@ -156,16 +190,6 @@ def prepare_gridclim_cube(
     # Join the path and variable.
     gridclim_path = os.path.join(gridclim_path, variable)
 
-    # This gives a list of files in the base path matchig the wildcard.
-    files = glob.glob(gridclim_path + "/*.nc")
-    # Create a cube.
-    cube = iris.load(files)
-
-    _ = iris.util.equalise_attributes(cube)
-
-    # We concat on time.
-    gc_cube = cube.concatenate_cube()
-
     # Do we have partial dates.
     if not partial_dates:
         time_range = [
@@ -174,12 +198,8 @@ def prepare_gridclim_cube(
         ]
         partial_dates = CFG["partial_dates"]
 
-    # Create a time constraint
-    time_constraint = iris.Constraint(
-        time=lambda cell: time_range[0] <= cell.point.year <= time_range[1]
-    )
-    # Extract.
-    gc_cube = gc_cube.extract(time_constraint)
+    # Load the GridClim cube.
+    gc_cube = load_gridclim(gridclim_path, time_range)
 
     # Extract roi
     if not roi_points:
@@ -291,16 +311,6 @@ def prepare_eobs_cube(
     # Join the path and variable.
     gridclim_path = os.path.join(gridclim_path, variable)
 
-    # This gives a list of files in the base path matchig the wildcard.
-    files = glob.glob(gridclim_path + "/*.nc")
-    # Create a cube.
-    cube = iris.load(files)
-
-    _ = iris.util.equalise_attributes(cube)
-
-    # We concat on time.
-    gc_cube = cube.concatenate_cube()
-
     # Do we have partial dates.
     if not partial_dates:
         time_range = [
@@ -309,12 +319,8 @@ def prepare_eobs_cube(
         ]
         partial_dates = CFG["partial_dates"]
 
-    # Create a time constraint
-    time_constraint = iris.Constraint(
-        time=lambda cell: time_range[0] <= cell.point.year <= time_range[1]
-    )
-    # Extract.
-    gc_cube = gc_cube.extract(time_constraint)
+    # Load GridClim.
+    gc_cube = load_gridclim(gridclim_path, time_range)
 
     # Load in the CORDEX ensemble.
     print("Loading EOBS")
@@ -458,16 +464,6 @@ def prepare_cordex_cube(
     # Join the path and variable.
     gridclim_path = os.path.join(gridclim_path, variable)
 
-    # This gives a list of files in the base path matchig the wildcard.
-    files = glob.glob(gridclim_path + "/*.nc")
-    # Create a cube.
-    cube = iris.load(files)
-
-    _ = iris.util.equalise_attributes(cube)
-
-    # We concat on time.
-    gc_cube = cube.concatenate_cube()
-
     # Do we have partial dates.
     if not partial_dates:
         time_range = [
@@ -476,12 +472,8 @@ def prepare_cordex_cube(
         ]
         partial_dates = CFG["partial_dates"]
 
-    # Create a time constraint
-    time_constraint = iris.Constraint(
-        time=lambda cell: time_range[0] <= cell.point.year <= time_range[1]
-    )
-    # Extract.
-    gc_cube = gc_cube.extract(time_constraint)
+    # Load GridClim.
+    gc_cube = load_gridclim(gridclim_path, time_range)
 
     # Load in the CORDEX ensemble.
     print("Loading the CORDEX ensemble")
@@ -518,6 +510,7 @@ def prepare_cordex_cube(
     _ = iris.util.equalise_attributes(cordex_cube)
 
     # We also need to remove the height coordinate since not all members have it.
+    # This is only relevant for e.g. tasmax.
     for cube in cordex_cube:
         try:
             cube.remove_coord("height")
