@@ -1,8 +1,8 @@
-from climix.metadata import load_metadata
 import iris
 import iris.analysis
 import iris.analysis.cartography
 import iris.coord_categorisation
+from climix.metadata import load_metadata
 from iris.exceptions import CoordinateNotFoundError
 
 

@@ -1,10 +1,12 @@
 import iris.analysis
-import iris.cube
-import iris.analysis.stats as istats
 import iris.analysis.maths as imaths
+import iris.analysis.stats as istats
 import iris.coord_categorisation
-from iris_utils import get_weights
+import iris.cube
 import numpy as np
+import scipy.stats as stats
+from iris_utils import get_weights
+from matplotlib import pyplot as plt
 
 
 def check_categorical_coords(candidate_cube: iris.cube.Cube, ref_cube: iris.cube.Cube):
@@ -303,16 +305,17 @@ def check_dist_params(fits: np.ndarray, fits_ci: np.ndarray, buffer: float = 0.0
     """Check which which of a list of fit parameters lies within the confidence
     interval of another fit.
 
-    Arguments:
-    ----------
+    Arguments
+    ---------
     fits : np.ndarray
         m distribution parameters from n different distributions. Shape n x m.
     fits_ci : np.ndarray
         Confidence interval to check the fit distribution params against. Should have the shape 3 x m.
     buffer : float
         Allow the candidate fits to outside the reference CI by some percentage.
-    Returns:
-    --------
+
+    Returns
+    -------
     results : np.ndarray of bool
     """
     # Check the shapes

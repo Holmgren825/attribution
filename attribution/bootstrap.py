@@ -1,10 +1,11 @@
-from multiprocessing import Pool
-import numpy as np
 import time
+from multiprocessing import Pool
 
-# Privates...
-from scipy.stats import _bootstrap as bs
+import numpy as np
 from scipy.special import ndtr, ndtri
+
+# Privates..
+from scipy.stats import _resampling as bs
 
 
 def jackknife_resample(sample, batch=None):

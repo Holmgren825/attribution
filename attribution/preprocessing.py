@@ -1,22 +1,24 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import glob
+import os
+from copy import deepcopy
+from functools import partial
+from multiprocessing import Pool
+
+import cartopy.crs as ccrs
+import dask
+import dask.distributed
+import geopandas as gpd
 import iris
 import iris.coord_categorisation
-from iris.time import PartialDateTime
-from iris.exceptions import CoordinateNotFoundError
 import iris_utils
-from copy import deepcopy
-import cartopy.crs as ccrs
 import numpy as np
-import dask
 from dask.distributed import Client
-import dask.distributed
-from functools import partial
-import os
-import glob
-from multiprocessing import Pool
-import geopandas as gpd
+from iris.exceptions import CoordinateNotFoundError
+from iris.time import PartialDateTime
+
 from attribution.config import init_config
 
 
@@ -344,7 +346,7 @@ def prepare_eobs_cube(
         grid_latitude=lambda v: ref_lats.min() <= v <= ref_lats.max(),
         grid_longitude=lambda v: ref_lons.min() <= v <= ref_lons.max(),
     )
-    print("Extract domain")
+    print("Extracting domain")
     eobs_cube = eobs_cube.extract(constraint)
 
     print("Extracting timespan")

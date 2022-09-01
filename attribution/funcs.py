@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 from iris.exceptions import CoordinateNotFoundError
+from sklearn.linear_model import LinearRegression
 
 
 def calc_prob_ratio(

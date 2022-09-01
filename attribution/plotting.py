@@ -1,6 +1,6 @@
-from matplotlib import pyplot as plt
 import numpy as np
 import scipy.stats as scstats
+from matplotlib import pyplot as plt
 
 
 def plot_distribution(data, dists_ci=None, scaled_dists_ci=None, title=None):
