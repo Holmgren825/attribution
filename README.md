@@ -10,6 +10,7 @@ Clone and install with `pip install -e .`
 - dask
 - geopandas
 - cartopy
+- [climix](https://git.smhi.se/climix/climix)
 - scipy
 - iris_utils: Small helper package available [here](https://github.com/Holmgren825/iris_utils).
 
