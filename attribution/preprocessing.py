@@ -13,6 +13,7 @@ import dask.distributed
 import geopandas as gpd
 import iris
 import iris.coord_categorisation
+import iris.util
 import iris_utils
 import numpy as np
 from dask.distributed import Client
@@ -217,7 +218,7 @@ def prepare_gridclim_cube(
         coord_names=("grid_latitude", "grid_longitude"),
     )
 
-    iris_utils.mask_cube(gc_cube, mask)
+    gc_cube = iris.util.mask_cube(gc_cube, mask)
 
     print("Saving cube")
     # Where to store the file
@@ -364,7 +365,7 @@ def prepare_eobs_cube(
     )
 
     # TODO replace with iris.utils when it is lazy.
-    iris_utils.mask_cube(eobs_cube, mask)
+    eobs_cube = iris.util.mask_cube(eobs_cube, mask)
 
     # Select roi
     if not roi_points:
@@ -538,8 +539,8 @@ def prepare_cordex_cube(
     # Broadcast along the fourth dimension (ensemble_id).
     mask = np.broadcast_to(mask, cordex_cube.shape)
 
-    # TODO replace with iris.utils when it is lazy.
-    iris_utils.mask_cube(cordex_cube, mask)
+    # Mask the cube.
+    cordex_cube = iris.util.mask_cube(cordex_cube, mask)
 
     # Check if grid points are almost equal
     lats = np.all(
