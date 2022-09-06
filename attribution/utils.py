@@ -1,9 +1,17 @@
+import geopandas as gpd
 import iris
 import iris.analysis
 import iris.analysis.cartography
 import iris.coord_categorisation
+import iris_utils
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
 from climix.metadata import load_metadata
 from iris.exceptions import CoordinateNotFoundError
+from tqdm.autonotebook import trange
+
+from attribution.config import init_config
 
 
 def select_season(cube, season_abbr, season_name="season"):
@@ -100,31 +108,8 @@ def compute_spatial_average(cube):
     Spatially averaged cube.
     """
 
-    # Have to guess the bounds of the cube.
-    try:
-        cube.coord("grid_latitude").guess_bounds()
-    # If we already have bounds, do nothing.
-    except ValueError:
-        pass
-    try:
-        cube.coord("grid_longitude").guess_bounds()
-    except ValueError:
-        pass
-
-    # Have to remove latitude and longitude if there
-    try:
-        cube.remove_coord("latitude")
-    # If we already have bounds, do nothing.
-    except ValueError:
-        pass
-    try:
-        cube.remove_coord("longitude")
-    # If we already have bounds, do nothing.
-    except ValueError:
-        pass
-
-    # Compute weights.
-    area_weights = iris.analysis.cartography.area_weights(cube)
+    # Get area weights.
+    area_weights = iris_utils.get_weights(cube)
 
     # Collapse the dimensions.
     averaged_cube = cube.collapsed(
@@ -132,3 +117,136 @@ def compute_spatial_average(cube):
     )
 
     return averaged_cube
+
+
+def get_country_shape(shapefile=None, country="Sweden"):
+    """Returns a polygon of Sweden mainland which can be used with iris_utils.mask_from_shape.
+
+    Arguments
+    ---------
+    shapefile : string, optional
+        Path to shapefile. Assumes it to be this file
+        https://www.naturalearthdata.com/downloads/10m-cultural-vectors/ Admin 0 - Countries.
+    country : string
+        Name of the country to select.
+    """
+    if not shapefile:
+        # Get the CFG.
+        CFG = init_config()
+        shapefile = CFG["paths"]["shapefile"]
+    # Load it.
+    gdf = gpd.read_file(shapefile)
+    # Sweden has multiple shapes
+    swe_shapes = gdf[gdf.SOVEREIGNT == country].geometry
+
+    # Return the first geometry.
+    # TODO This might cause issues with other countries.
+    return swe_shapes.iloc[0].geoms[0]
+
+
+def compute_cube_regression(cube, predictor, broadcast_coef=True):
+    """Compute the regression coefficient between the data in cube and a predictor.
+
+    Arguments
+    ---------
+    cube : iris.cube.Cube
+        Cube containing the data on which to perform the regression.
+    predictor : array_like
+        Data to use a predictor in the linear regression.
+    broadcast_coef : bool, default: True
+        Return the compressed regression coefficients, broadcasted so that there
+        is one value per gridpoint and year.
+
+    Returns
+    -------
+    The regression coefficient.
+    """
+    # Make sure data is not lazy
+    data = cube.data
+    # Shape
+    lat_shape = cube.coord("grid_latitude").shape[0]
+    lon_shape = cube.coord("grid_longitude").shape[0]
+    # Store the results
+    coefs = np.zeros((lat_shape, lon_shape))
+    pvalues = np.zeros((lat_shape, lon_shape))
+    # We use statsmodels
+    X = sm.add_constant(predictor)
+    # Loop over all gridpoints. Mask later.
+    for lat in trange(lat_shape):
+        for lon in range(lon_shape):
+            # Get the result
+            res = sm.OLS(data[:, lat, lon], X).fit()
+            coefs[lat, lon] = res.params[-1]
+            pvalues[lat, lon] = res.pvalues[-1]
+
+    # Mask the result arrays. The cube should hold the dance.
+    coefs = np.ma.masked_array(coefs, cube.data.mask[0, :, :])
+    pvalues = np.ma.masked_array(pvalues, cube.data.mask[0, :, :])
+
+    # This returns the compressed and broadcasted array.
+    if broadcast_coef:
+        coefs = coefs.compressed()
+        # Broadcast so that there is one coef for each year.
+        coefs = np.broadcast_to(coefs, (predictor.shape[0], coefs.shape[0]))
+        return coefs
+    # If not, we return the masked arrays.
+    else:
+        return coefs, pvalues
+
+
+def get_gmst(cube, path=None, window=4):
+    """Get the gmst timeseries for the corresponding cube.
+
+    Arguments
+    ---------
+    cube : iris.Cube
+        Used to get the timespan.
+    path : string, Optional.
+        Path to local gistemp data.
+    window : int
+        Size of smoothing window.
+
+    Returns
+    -------
+    gmst_data :
+    """
+    url = "https://data.giss.nasa.gov/gistemp/graphs/graph_data/Global_Mean_Estimates_based_on_Land_and_Ocean_Data/graph.txt"
+    if not path:
+        df = pd.read_csv(
+            # Load in the dataset.
+            url,
+            sep=r"\s+",
+            header=2,
+        )
+    else:
+        df = pd.read_csv(
+            # Load in the dataset.
+            path,
+            sep=r"\s+",
+            header=2,
+        )
+    # Clean it a little
+    df = df.drop(0)
+    df = df.reset_index(drop=True)
+    # Cast the years to int.
+    df.Year = df.Year.astype(int)
+
+    # Create the smoothed data
+    df["4yr_smoothing"] = df["No_Smoothing"].rolling(window).mean()
+
+    # Get the first and last year of the cube
+    # Assumes that we have a coordinate year.
+    try:
+        first_year = cube.coord("year").points[0]
+        last_year = cube.coord("year").points[-1]
+    except CoordinateNotFoundError:
+        first_year = cube.coord("season_year").points[0]
+        last_year = cube.coord("season_year").points[-1]
+
+    # Select the timespan
+    gmst = df[(df.Year >= first_year) & (df.Year <= last_year)].reset_index(drop=True)
+
+    # Get the smoothed data for our interval as an array.
+    gmst_data = gmst["4yr_smoothing"].to_numpy().reshape(-1, 1)
+
+    return gmst_data
