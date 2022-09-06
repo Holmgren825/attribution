@@ -93,24 +93,47 @@ def region_selection(cube, roi_points):
     return cube
 
 
-def load_gridclim(gridclim_path, time_range):
+def load_gridclim(gridclim_path=None, variable=None, time_range=None):
     """Load the gridclim data.
 
     Agruments:
     ----------
-    griclim_path : string
-        Path to GridClim data.
-    time_range : array_like
+    griclim_path : string, optional
+        Path to GridClim data. Will read from config.yml by default.
+    variable : string, optional
+        Which variable to read. Will read from config.yml by default.
+    time_range : array_like, optional
         Sequence of years describing the lower and upper range of the timespan.
+        Will read from config.yml by default.
 
     Returns:
     --------
     gc_cube : iris.Cube.cube
         Iris cube with GridClim data.
     """
+
+    # Path to gridclim?
+    if gridclim_path is None:
+        # Load the config.
+        CFG = init_config()
+        # Get gridclim path.
+        gridclim_path = CFG["paths"]["data"]["gridclim"]
+    # Do we have the variable?
+    if variable is None:
+        variable = CFG["variable"]
+    # Join the path and variable.
+    gridclim_path = os.path.join(gridclim_path, variable)
+
+    # Do we have partial dates.
+    if not time_range:
+        time_range = [
+            CFG["partial_dates"]["low"]["year"],
+            CFG["partial_dates"]["high"]["year"],
+        ]
     # This gives a list of files in the base path matchig the wildcard.
     files = glob.glob(gridclim_path + "/*.nc")
     # Create a cube.
+    iris.FUTURE.datum_support = True
     cube = iris.load(files)
 
     _ = iris.util.equalise_attributes(cube)
