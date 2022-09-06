@@ -1,8 +1,5 @@
-"""Collection of helper functions useful when working with attribution."""
+"""Attribution functions."""
 import numpy as np
-import pandas as pd
-from iris.exceptions import CoordinateNotFoundError
-from sklearn.linear_model import LinearRegression
 
 
 def calc_prob_ratio(
@@ -124,61 +121,3 @@ def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     loc = loc0 + regr_slope * temperature
 
     return shape0, loc, scale0
-
-
-def get_gmst(cube, path=None, window=4):
-    """Get the gmst timeseries for the corresponding cube.
-
-    Arguments
-    ---------
-    cube : iris.Cube
-        Used to get the timespan.
-    path : string, Optional.
-        Path to local gistemp data.
-    window : int
-        Size of smoothing window.
-
-    Returns
-    -------
-    gmst_data :
-    """
-    url = "https://data.giss.nasa.gov/gistemp/graphs/graph_data/Global_Mean_Estimates_based_on_Land_and_Ocean_Data/graph.txt"
-    if not path:
-        df = pd.read_csv(
-            # Load in the dataset.
-            url,
-            sep=r"\s+",
-            header=2,
-        )
-    else:
-        df = pd.read_csv(
-            # Load in the dataset.
-            path,
-            sep=r"\s+",
-            header=2,
-        )
-    # Clean it a little
-    df = df.drop(0)
-    df = df.reset_index(drop=True)
-    # Cast the years to int.
-    df.Year = df.Year.astype(int)
-
-    # Create the smoothed data
-    df["4yr_smoothing"] = df["No_Smoothing"].rolling(window).mean()
-
-    # Get the first and last year of the cube
-    # Assumes that we have a coordinate year.
-    try:
-        first_year = cube.coord("year").points[0]
-        last_year = cube.coord("year").points[-1]
-    except CoordinateNotFoundError:
-        first_year = cube.coord("season_year").points[0]
-        last_year = cube.coord("season_year").points[-1]
-
-    # Select the timespan
-    gmst = df[(df.Year >= first_year) & (df.Year <= last_year)].reset_index(drop=True)
-
-    # Get the smoothed data for our interval as an array.
-    gmst_data = gmst["4yr_smoothing"].to_numpy().reshape(-1, 1)
-
-    return gmst_data
