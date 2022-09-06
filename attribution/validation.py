@@ -337,3 +337,74 @@ def check_dist_params(fits: np.ndarray, fits_ci: np.ndarray, buffer: float = 0.0
     results = np.all(results, axis=1)
 
     return results
+
+
+def inspect_distributions(
+    data: np.ndarray,
+    dists: dict,
+    plot: bool = True,
+    cdf: bool = True,
+    n_bins: int = 25,
+    figsize: tuple = None,
+):
+    """Utility to inspect which distributions are suitable to represent the data.
+    Computes the Kolmogorov-Smirnof 1 sample test and additionally plots the
+    over a histogram of the data.
+
+    Arguments
+    ---------
+    data : np.ndarray
+    dists : dict
+        Dictionary holding the distributions to evaluate. A key value pair correspond
+        to the name of the distribution and the corresponding scipy.stats.rv_continous distribution.
+    plot : bool
+        Whether to plot the distribution along with their ks p-values.
+    cdf : bool
+        Plot the cdf instead of the pdf.
+    n_bins : int
+        Number of bins for the histogram/ECDF.
+    figsize : tuple, optional
+        Set the size of the figure.
+
+    Returns
+    -------
+    KS test results.
+    """
+
+    # First compute the ks test
+    ks_results = {}
+    if plot:
+        # Create the figure.
+        _, ax = plt.subplots(figsize=figsize)
+        # Plot the histogram/ecdf.
+        ax.hist(
+            data,
+            n_bins,
+            density=True,
+            cumulative=cdf,
+            histtype="step",
+            label="Empirical",
+        )
+
+    for key, dist in dists.items():
+        # Fit the distribution to the data.
+        fit = dist.fit(data)
+        # Compute the KS statistic.
+        res = stats.ks_1samp(data, dist.cdf, args=fit)
+        # Store the results in the dict.
+        ks_results[key] = res
+        if plot:
+            # Need some x values to plot along.
+            x = np.linspace(0, data.max(), 200)
+            # Plot cdf or pdf.
+            if cdf:
+                func = dist.cdf
+                ax.set_title("ECDF along with CDFs of distributions.")
+            else:
+                func = dist.pdf
+                ax.set_title("Histogram along with distributions fit to the data.")
+            # The actual plot
+            ax.plot(x, func(x, *fit), label=f"{key}, ks p: {res.pvalue:.4f}")
+            plt.legend()
+
+    return ks_results
