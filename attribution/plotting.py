@@ -1,64 +1,103 @@
+import cartopy.crs as ccrs
+import iris.plot as iplt
+import matplotlib.cm as cm
+import matplotlib.colors as colors
 import numpy as np
-import scipy.stats as scstats
+from iris.cube import Cube
 from matplotlib import pyplot as plt
 
+from attribution.utils import compute_cube_regression
 
-def plot_distribution(data, dists_ci=None, scaled_dists_ci=None, title=None):
-    """Plot the histogram of the data along with distributions.
+
+def plot_regression_map(
+    index_cube,
+    index_name,
+    predictor=None,
+    reg_coefs=None,
+    pvalues=None,
+    p_lim=None,
+    epsg=None,
+    ax=None,
+):
+    """Plot a regression map of the regression coefficents between cube variable and the predictor.
 
     Arguments
     ---------
-    data : ndarray
-        1d array of the sample.
-    dists_ci : scipy.rv_continous or list
-        Either a single distribtuion or a list of distributions.
-        If a list, they are assumed to be in ordered percentiles e.g. 5, 50, 95.
-        Optional
-    scaled_dists_ci : scipy.rv_continous or dict.
-        Either a single distribtuion or a dictionary of scaled distributions.
-        If a dict, keys correspond to identifier and value is a list of the #!/usr/bin/env python3
-        distributions for that key.
-        Optional
-    title : string
-        Title of the plot.
+    cube : iris.cube.Cube
+        iris cube holding the data on which to perform the regression.
+    predictor : np.ndarray, optional
+        1d array with the predictor data.
+    reg_coefs : np.ndarray, optional
+        2d array of regression coefficients. Using this the regression does not have to be re-run.
+    pvalues : np.ndarray, optional
+        2d array with pvalues for the regression coefficients.
+    epsg : string
+        EPSG code for custom plot projection.
+    ax : matplotlib.axes.Axes
+        Draw the plot on custom axes.
     """
-    # Generate an evenly spaced array of data points in our interval.
-    x = np.linspace(data.min(), data.max(), num=200)
 
-    # Create the figure.
-    fig, ax = plt.subplots(figsize=(7, 5))
+    if reg_coefs is None:
+        if predictor is None:
+            raise ValueError("predictor required if reg_coefs is None")
 
-    # Plot the histogram
-    ax.hist(data, density=True, histtype="stepfilled", label="Observations", alpha=0.5)
-    # Current climate
-    # If it is a single distribution.
-    if dists_ci and isinstance(dists_ci, scstats.rv_continuous):
-        ax.plot(x, dists_ci.pdf(x), label="Current climate")
-
-    # If we have a list of distributions.
-    elif dists_ci and isinstance(dists_ci, list):
-        # We just assumed the length is three.
-        ax.plot(x, dists_ci[1].pdf(x), label="Current climate")
-        ax.fill_between(x, dists_ci[0].pdf(x), dists_ci[2].pdf(x), alpha=0.5)
-
-    # Counter factual
-    if scaled_dists_ci and isinstance(scaled_dists_ci, scstats.rv_continuous):
-        ax.plot(x, scaled_dists_ci.pdf(x), label="Counterfactual climate")
-
-    # If we have a list of distributions.
-    elif scaled_dists_ci and isinstance(scaled_dists_ci, dict):
-        # We just assumed the length is three.
-        for key, dists in scaled_dists_ci.items():
-            ax.plot(
-                x,
-                dists[1].pdf(x),
-                label=f"Counterfactual climate\n{key} slope",
-            )
-            ax.fill_between(x, dists[0].pdf(x), dists[2].pdf(x), alpha=0.5)
-
-    # Add a legend
-    ax.set_xlabel("Precipitation flux")
-    ax.set_ylabel("Density")
-    if title:
-        ax.set_title(title)
-    plt.legend()
+        # Compute the regression.
+        reg_coefs, pvalues = compute_cube_regression(
+            index_cube, predictor, broadcast_coef=False
+        )
+    # We want to compute the regression over every gridpoint
+    # For ease of plotting we create a simple iris cube of the regression.
+    reg_cube = Cube(
+        reg_coefs,
+        dim_coords_and_dims=[
+            (index_cube.coord("grid_latitude"), 0),
+            (index_cube.coord("grid_longitude"), 1),
+        ],
+    )
+    # Was an axes passed?
+    if ax is None:
+        # Custom projection?
+        if epsg is None:
+            projection = ccrs.PlateCarree()
+        # Default to PlateCarree
+        else:
+            projection = ccrs.epsg(epsg)
+        # Create the axes.
+        fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"projection": projection})
+    # Get the colormap.
+    cmap = cm.get_cmap("brewer_RdBu_11")
+    # Plot the cube. The CenteredNorm maps data to [0, 1] for the colormap,
+    # where 0 of original data is mapped to 0.5, since we have a diverging cmap.
+    iplt.contourf(reg_cube, norm=colors.CenteredNorm(), cmap=cmap, axes=ax)
+    # Add colorbar.
+    plt.colorbar()
+    # Scatter confidence
+    if p_lim is not None:
+        # Get indices of significant values.
+        y, x = np.argwhere(pvalues <= p_lim).T
+        # Need their cooridnate values.
+        y = index_cube.coord("grid_latitude").points[..., y]
+        x = index_cube.coord("grid_longitude").points[..., x]
+        # Scatter them
+        coord_system = index_cube.coord_system().as_cartopy_projection()
+        ax.scatter(
+            x,
+            y,
+            marker="+",
+            c="k",
+            alpha=0.3,
+            label=f"p$\leq${p_lim}",
+            transform=coord_system,
+        )
+    # Title
+    t0 = index_cube.coord("time").cell(0).point.strftime("%Y")
+    t1 = index_cube.coord("time").cell(-1).point.strftime("%Y")
+    ax.set_title(f"GMST to {index_name} regression coef. map\n{t0}-{t1}")
+    # Gridlines
+    gl = ax.gridlines(draw_labels=True)
+    # Remove ylabels on right side.
+    gl.right_labels = False
+    try:
+        fig.tight_layout()
+    except NameError:
+        pass
