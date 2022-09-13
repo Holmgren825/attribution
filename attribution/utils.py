@@ -54,7 +54,7 @@ def select_season(cube, season_abbr, season_name="season"):
     return season_cube
 
 
-def compute_index(cube, index_name, client, spatial_average=False):
+def compute_index(cube, index_name, client, spatial_average=False, spatial_max=False):
     """Compute a climate index based on the cube using Climix.
 
     Arguments:
@@ -64,8 +64,10 @@ def compute_index(cube, index_name, client, spatial_average=False):
     index_name : string
         CF name of the index to compute.
     client : dask.distributed.Client
-    spatial_average : bool, Default: False
+    spatial_average : bool, default: False
         Whether to return a spatially averaged cube or not.
+    spatial_max : bool, default: False
+        Whether to return the spatial max for each year or not.
 
     Returns:
     --------
@@ -92,6 +94,11 @@ def compute_index(cube, index_name, client, spatial_average=False):
     # Do we want to compute the spatial average
     if spatial_average:
         index_cube = compute_spatial_average(index_cube)
+    # If not, do we want to compute the spatial max?
+    elif spatial_max:
+        index_cube = index_cube.collapsed(
+            ["grid_latitude", "grid_longitude"], iris.analysis.MAX
+        )
 
     return index_cube
 
