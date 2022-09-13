@@ -113,19 +113,20 @@ def load_gridclim(gridclim_path=None, variable=None, time_range=None):
     """
 
     # Path to gridclim?
+    # If we have a path to gridclim we assume it is complete with the variable.
     if gridclim_path is None:
         # Load the config.
         CFG = init_config()
+        # Do we have the variable?
+        if variable is None:
+            variable = CFG["variable"]
         # Get gridclim path.
         gridclim_path = CFG["paths"]["data"]["gridclim"]
-    # Do we have the variable?
-    if variable is None:
-        variable = CFG["variable"]
-    # Join the path and variable.
-    gridclim_path = os.path.join(gridclim_path, variable)
+        # Join the path and variable.
+        gridclim_path = os.path.join(gridclim_path, variable)
 
     # Do we have partial dates.
-    if not time_range:
+    if time_range is None:
         time_range = [
             CFG["partial_dates"]["low"]["year"],
             CFG["partial_dates"]["high"]["year"],
@@ -225,7 +226,7 @@ def prepare_gridclim_cube(
         partial_dates = CFG["partial_dates"]
 
     # Load the GridClim cube.
-    gc_cube = load_gridclim(gridclim_path, time_range)
+    gc_cube = load_gridclim(gridclim_path, time_range=time_range)
 
     # Extract roi
     if not roi_points:
@@ -346,7 +347,7 @@ def prepare_eobs_cube(
         partial_dates = CFG["partial_dates"]
 
     # Load GridClim.
-    gc_cube = load_gridclim(gridclim_path, time_range)
+    gc_cube = load_gridclim(gridclim_path, time_range=time_range)
 
     # Load in the CORDEX ensemble.
     print("Loading EOBS")
@@ -499,7 +500,7 @@ def prepare_cordex_cube(
         partial_dates = CFG["partial_dates"]
 
     # Load GridClim.
-    gc_cube = load_gridclim(gridclim_path, time_range)
+    gc_cube = load_gridclim(gridclim_path, time_range=time_range)
 
     # Load in the CORDEX ensemble.
     print("Loading the CORDEX ensemble")
@@ -583,7 +584,7 @@ def prepare_cordex_cube(
 
     # If these are both true we can replace the cordex coordinate points/bounds with the GridClim ones.
     if lats and longs:
-        coords = ["grid_latitide", "grid_longitude", "latitude", "longitude"]
+        coords = ["grid_latitude", "grid_longitude", "latitude", "longitude"]
         # Loop over the coordinates and copy over points and bounds.
         for coord in coords:
             cordex_cube.coord(coord).points = deepcopy(gc_cube.coord(coord).points)
