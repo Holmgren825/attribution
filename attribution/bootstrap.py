@@ -1,3 +1,4 @@
+import multiprocessing.pool as mpp
 import time
 from multiprocessing import Pool
 
@@ -6,6 +7,29 @@ from scipy.special import ndtr, ndtri
 
 # Privates..
 from scipy.stats import _resampling as bs
+from tqdm.autonotebook import tqdm
+
+
+def istarmap(self, func, iterable, chunksize=1):
+    """starmap-version of imap"""
+    if self._state != mpp.RUN:
+        raise ValueError("Pool not running")
+
+    if chunksize < 1:
+        raise ValueError("Chunksize must be 1+, not {0:n}".format(chunksize))
+
+    task_batches = mpp.Pool._get_tasks(func, iterable, chunksize)
+    result = mpp.IMapIterator(self)
+    self._taskqueue.put(
+        (
+            self._guarded_task_generation(result._job, mpp.starmapstar, task_batches),
+            result._set_length,
+        )
+    )
+    return (item for chunk in result for item in chunk)
+
+
+mpp.Pool.istarmap = istarmap
 
 
 def jackknife_resample(sample, batch=None):
@@ -105,7 +129,12 @@ def bca_interval(data, statistic, axis, alpha, theta_hat_b, batch, client):
 
 
 def bootstrap_mp(
-    data, statistic, alpha=0.05, n_resamples=9999, batch=None, client=None
+    data,
+    statistic,
+    alpha=0.05,
+    n_resamples=9999,
+    batch=None,
+    client=None,
 ):
     """Bootstrapping the confidence interval of statistic accodring to the BCa method.
     Essentially a copy of the internals of scipy.stats._bootstrap, but with some added paralellisation.
@@ -150,8 +179,6 @@ def bootstrap_mp(
     # Then we pick these indices from data and slopes
     resampled_data = data[0][..., resample_indices]
     resampled_slopes = data[1][..., resample_indices]
-    # We can select the random slope here
-    resampled_slopes = rng.choice(resampled_slopes, axis=1)
     # If we get a dask client, use it.
     if client:
         print("Submitting resampling tasks to client")
@@ -165,7 +192,15 @@ def bootstrap_mp(
         # If no client is provided we simply use the standard multiprocessing pool.
         # Likley faster on a single machine.
         with Pool() as p:
-            theta_hat_b = p.starmap(statistic, zip(resampled_data, resampled_slopes))
+            theta_hat_b = list(
+                tqdm(
+                    p.istarmap(
+                        statistic,
+                        zip(resampled_data, resampled_slopes),
+                    ),
+                    total=n_resamples,
+                )
+            )
 
     t1 = time.time()
     runtime = time.strftime("%H:%M:%S", time.gmtime(t1 - t0))
