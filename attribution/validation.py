@@ -5,7 +5,7 @@ import iris.coord_categorisation
 import iris.cube
 import numpy as np
 import scipy.stats as stats
-from iris_utils import get_weights
+from iris_utils.utils import get_weights
 from matplotlib import pyplot as plt
 
 
