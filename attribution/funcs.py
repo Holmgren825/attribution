@@ -3,7 +3,16 @@ import numpy as np
 
 
 def calc_prob_ratio(
-    data, regr_slopes, threshold, temperature, dist, scale_dist=True, axis=None
+    data,
+    regr_slopes,
+    threshold,
+    temperature,
+    dist,
+    scale_dist=True,
+    log_sf=False,
+    random_slope=False,
+    rng=None,
+    axis=None,
 ):
     """Calculate the probability ratio for an event of magnitude (threshold) under the
     current climate (data) and a counterfactual climate (shifted/scaled) according to the
@@ -13,50 +22,74 @@ def calc_prob_ratio(
     ----------
     data : np.ndarray
         Data to perform the calculation on.
-    regr_slopes : numpy.ndarray(float) or float
-        Regression coefficient(s) between GMST and the variable.
+    regr_slopes : np.ndarray
+        Regression coefficients between GMST and the variable.
     threshold : int/float
-        Threshold value to the investigated event.
+        Threshold value for the investigated event.
     temperature : float
         Temperature (GMST) used to shift/scale the distribution.
     dist : scipy.stats.rv_contious
         Distribution used to fit the data.
     scale_dist : bool
         Whether to scale or shift the distribution. Default: True.
+    log_sf : bool, default: False
+        Compute the log of the survival function.
+    random_slope : bool, default: False
+        Select a random slope from regr_slopes for scaling/shifting the distribution.
+    rng : np.random.default_rng, optional
+        Random number generator.
     axis : int, optional
         Needed for bootstrap?
 
     Returns
     -------
-    The probability ratio for the event, based on the current and counterfactual climate.
+    prob_ratio : float
+        The probability ratio for the event, based on the current and
+        counterfactual climate.
     """
 
     data = data.reshape(-1)
-    # Resample the data
-    # data = data[..., resample_index]
     # Fit a distribution
     fit = dist.fit(data)
 
-    # Calculate the probability under the current climate.
-    p1 = 1 - dist.cdf(threshold, *fit)
-
     # Select a regression slope randomly - adds the variation of the
     # varying regression to GMST.
-    if isinstance(regr_slopes, np.ndarray):
+    # If not we pick the median.
+    if not random_slope:
         regr_slope = np.median(regr_slopes)
-    # If not, we assume a single slope is passed.
     else:
-        regr_slope = regr_slopes
+        # Do we have an rng?
+        if not rng:
+            rng = np.random.default_rng()
+        # Select a random slope.
+        regr_slope = rng.choice(regr_slopes)
+    # Should the distribution be scaled or shifted?
     if scale_dist:
         # Scale the distribution to create the counterfactual climate.
         adjusted_fit = scale_dist_params(temperature, *fit, regr_slope)
     else:
         # Shift the distribution.
         adjusted_fit = shift_dist_params(temperature, *fit, regr_slope)
-    # Calculate the probability unde the counterfactual climate.
-    p0 = 1 - dist.cdf(threshold, *adjusted_fit)
 
-    return p1 / p0
+    # Calculate prob. ratio
+    if log_sf:
+        p_func = dist.logsf
+        # Calculate the probability under the current climate.
+        p1 = p_func(threshold, *fit)
+        # Calculate the probability unde the counterfactual climate.
+        p0 = p_func(threshold, *adjusted_fit)
+        # The ratio is inverted for log_sf.
+        prob_ratio = p0 / p1
+    else:
+        # Survival function.
+        p_func = dist.sf
+        # Probabilities.
+        p1 = p_func(threshold, *fit)
+        p0 = p_func(threshold, *adjusted_fit)
+        # Ratio.
+        prob_ratio = p1 / p0
+
+    return prob_ratio
 
 
 def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
