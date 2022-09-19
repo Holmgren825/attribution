@@ -116,7 +116,7 @@ def compute_spatial_average(cube):
     """
 
     # Get area weights.
-    area_weights = iris_utils.get_weights(cube)
+    area_weights = iris_utils.utils.get_weights(cube)
 
     # Collapse the dimensions.
     averaged_cube = cube.collapsed(
@@ -255,5 +255,76 @@ def get_gmst(cube, path=None, window=4):
 
     # Get the smoothed data for our interval as an array.
     gmst_data = gmst["4yr_smoothing"].to_numpy().reshape(-1, 1)
+
+    return gmst_data
+
+
+def get_monthly_gmst(cube=None, path=None, window=4):
+    """Get the monthly gmst timeseries for the corresponding cube.
+
+    Arguments
+    ---------
+    cube : iris.Cube, optional
+        Used to get the timespan.
+    path : string, optional.
+        Path/url MST data.
+    window : int
+        Size of smoothing window in years.
+
+    Returns
+    -------
+    gmst_data : np.ndarray
+    """
+    url = "https://data.giss.nasa.gov/gistemp/graphs_v4/graph_data/Monthly_Mean_Global_Surface_Temperature/graph.txt"
+    if not path:
+        df = pd.read_csv(
+            # Load in the dataset.
+            url,
+            sep=r"\s+",
+            header=2,
+        )
+    else:
+        df = pd.read_csv(
+            # Load in the dataset.
+            path,
+            sep=r"\s+",
+            header=2,
+        )
+    # Drop the first row.
+    df = df.drop(0)
+
+    # Wrangling to get an datetime index.
+    date_df = df["Year+Month"].str.split(".", expand=True)
+
+    # Month is in decimal format.
+    month = date_df[1].astype(int) / 100
+
+    # We round it to zero and multiply with 12 to get it on the form "m".
+    month = np.around((month + 0.04) * 12).astype(int)
+    # Replace the old month.
+    date_df[1] = month
+
+    # Combine them columns again and convert to datetime.
+    df["datetime"] = pd.to_datetime(
+        date_df[0].astype(str) + "-" + date_df[1].astype(str), format="%Y-%m"
+    )
+
+    # No longer need the old date column
+    df = df.drop(columns="Year+Month")
+    # And set the new one as the index.
+    df = df.set_index("datetime")
+
+    # Smooth it
+    df = df.rolling(window * 12, center=False).mean()
+
+    if cube:
+        # Select the years of the cube.
+        first_year = cube.coord("time").cell(0).point.strftime("%Y-%m")
+        last_year = cube.coord("time").cell(-1).point.strftime("%Y-%m")
+        # Select timespan
+        df = df[first_year:last_year]
+
+    # Return numpy array of Land+Ocean temp.
+    gmst_data = df["Land+Ocean"].to_numpy()
 
     return gmst_data
