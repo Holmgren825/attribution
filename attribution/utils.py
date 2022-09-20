@@ -328,3 +328,46 @@ def get_monthly_gmst(cube=None, path=None, window=4):
     gmst_data = df["Land+Ocean"].to_numpy()
 
     return gmst_data
+
+
+def compute_monthly_regression_coefs(cube, monthly_predictor):
+    """Compute the monthly regression coefficients.
+
+    Argruments
+    ----------
+    cube : iris.cube.Cube
+        Cube holding the data.
+    monthly_predictor : np.ndarray
+        Array of a predictor, with same length as the number of months in cube.
+
+    Returns
+    -------
+    coefs : np.ndarray
+        Monthly regression coefficients.
+    p_values : np.ndarray
+        P-values for corresponding regression coefficients.
+    """
+    # Get the median.
+    monthly_data = cube.aggregated_by(
+        ["year", "month_number"], iris.analysis.MEDIAN
+    ).data
+    # Group the data in months.
+    monthly_data = monthly_data.reshape(-1, 12)
+    monthly_predictor = monthly_predictor.reshape(-1, 12)
+    # Somewhere to store the coefs.
+    betas = np.zeros((12))
+    p_values = np.zeros((12))
+
+    # Loop over each month.
+    for i, (data_month, gmst_month) in enumerate(
+        zip(monthly_data.T, monthly_predictor.T)
+    ):
+        # Add a constant to the predictor.
+        X = sm.add_constant(gmst_month)
+        # Fit the OLS.
+        res = sm.OLS(data_month, X).fit()
+        # Save the results.
+        betas[i] = res.params[-1]
+        p_values[i] = res.pvalues[-1]
+
+    return betas, p_values
