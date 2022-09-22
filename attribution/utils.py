@@ -3,11 +3,11 @@ import iris
 import iris.analysis
 import iris.analysis.cartography
 import iris.coord_categorisation
+import iris.util
 import iris_utils
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from climix.metadata import load_metadata
 from iris.exceptions import CoordinateNotFoundError
 from tqdm.autonotebook import trange
 
@@ -54,16 +54,23 @@ def select_season(cube, season_abbr, season_name="season"):
     return season_cube
 
 
-def compute_index(cube, index_name, client, spatial_average=False, spatial_max=False):
+def compute_index(
+    cube,
+    index,
+    client,
+    spatial_average=False,
+    spatial_max=False,
+):
     """Compute a climate index based on the cube using Climix.
 
     Arguments:
     ----------
-    cube : iris.Cube.cube
-
-    index_name : string
-        CF name of the index to compute.
+    cube : iris.cube.Cube
+        The data cube.
+    index : climix.index.Index
+        The prepared climix index.
     client : dask.distributed.Client
+        Client passed to climix.
     spatial_average : bool, default: False
         Whether to return a spatially averaged cube or not.
     spatial_max : bool, default: False
@@ -71,26 +78,31 @@ def compute_index(cube, index_name, client, spatial_average=False, spatial_max=F
 
     Returns:
     --------
-    index_cube
+    index_cube : iris.cube.Cube
 
     """
-    # Prepare the catalog
-    index_catalog = load_metadata()
-
-    # Select the index
-    index = index_catalog.prepare_indices([index_name])[0]
 
     # Prepare the cube.
-    # Can't have a "year" coordinate in climix
+    # Can't have a "year" coordinate.
     try:
         cube.remove_coord("year")
     # If there is none, do nothing.
     except CoordinateNotFoundError:
         pass
 
+    # Cube has to be lazy for climix to work.
+    iris_utils.utils.make_lazy(cube)
+
+    # If cube is not 3d, add dummy dimensions until 3d.
+    if n := 3 - len(cube.shape):
+        for _ in range(n):
+            cube = iris.util.new_axis(cube)
+
     # Compute the index.
     index_cube = index([cube], client)
 
+    # Remove dummy dimensions
+    index_cube = iris.util.squeeze(index_cube)
     # Do we want to compute the spatial average
     if spatial_average:
         index_cube = compute_spatial_average(index_cube)
