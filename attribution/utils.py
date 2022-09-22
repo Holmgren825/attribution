@@ -274,7 +274,7 @@ def get_gmst(cube, path=None, window=4):
     return gmst_data
 
 
-def get_monthly_gmst(cube=None, path=None, window=4):
+def get_monthly_gmst(cube=None, path=None, window=4, return_df=False):
     """Get the monthly gmst timeseries for the corresponding cube.
 
     Arguments
@@ -285,6 +285,8 @@ def get_monthly_gmst(cube=None, path=None, window=4):
         Path/url MST data.
     window : int
         Size of smoothing window in years.
+    return_df : bool, defaul: False
+        Return a dataframe. Otherwise a numpy array.
 
     Returns
     -------
@@ -340,7 +342,10 @@ def get_monthly_gmst(cube=None, path=None, window=4):
         df = df[first_year:last_year]
 
     # Return numpy array of Land+Ocean temp.
-    gmst_data = df["Land+Ocean"].to_numpy()
+    if not return_df:
+        gmst_data = df["Land+Ocean"].to_numpy()
+    else:
+        gmst_data = df["Land+Ocean"]
 
     return gmst_data
 
