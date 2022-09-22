@@ -37,14 +37,17 @@ def select_season(cube, season_abbr, season_name="season"):
         iris.coord_categorisation.add_month(cube, "time")
     # If there already is a month coordinate, we pass.
     except ValueError:
-        print("Cooridnate month alredy exist.")
+        # Printing will be annoying when doing this 1000s of times.
+        # print("Cooridnate month alredy exist.")
+        pass
     # Then we add the membership
     try:
         iris.coord_categorisation.add_season_membership(
             cube, "time", name=season_name, season=season_abbr
         )
     except ValueError:
-        print("Season membership already exist.")
+        # print("Season membership already exist.")
+        pass
 
     # Create the constriant
     season_constraint = iris.Constraint(coord_values={season_name: True})
