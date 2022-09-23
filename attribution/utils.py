@@ -13,7 +13,7 @@ from iris.exceptions import CoordinateNotFoundError
 from tqdm.autonotebook import trange
 
 from attribution.config import init_config
-from attribution.funcs import shift_cube_data
+from attribution.funcs import q_shift_cube_data, shift_cube_data
 
 
 def select_season(cube, season_abbr, season_name="season"):
@@ -397,6 +397,59 @@ def compute_monthly_regression_coefs(cube, monthly_predictor):
     return betas, p_values
 
 
+def compute_monthly_q_regression_coefs(cube, monthly_predictor, tqdm=False):
+    """Compute the monthly quantile regression coefficients.
+
+    Argruments
+    ----------
+    cube : iris.cube.Cube
+        Cube holding the data.
+    monthly_predictor : np.ndarray
+        Array of a predictor, with same length as the number of months in cube.
+    tqdm : bool, default: True
+
+    Returns
+    -------
+    coefs : np.ndarray
+        Monthly regression coefficients.
+    p_values : np.ndarray
+        P-values for corresponding regression coefficients.
+    """
+    # How many years in the cube?
+    n_years = (
+        cube.coord("time").cell(-1).point.year
+        - cube.coord("time").cell(0).point.year
+        + 1
+    )
+
+    betas = np.zeros((12, 30))
+    pvalues = np.zeros((12, 30))
+
+    # 30 quantiles between 0 and 1.
+    quantiles = np.linspace(0, 1, num=30)
+    # Do This for every month.
+    monthly_predictor = monthly_predictor.reshape(-1, 12)
+    for month in trange(12, disable=not tqdm):
+        # Select monthly data.
+        constraint = iris.Constraint(month_number=month + 1)
+        # Double data since we dont care about the mask at this stage.
+        current_data = cube.extract(constraint).data.data
+        # Reshape into year x days per month.
+        current_data = current_data.reshape(n_years, -1)
+        # What are the quantile values?
+        q_vals = np.quantile(current_data, quantiles, axis=1)
+        # Select the gmst series for that month.
+        X = monthly_predictor[:, month]
+        X = sm.add_constant(X)
+        # Compute the regression for every quantile.
+        for i in range(30):
+            res = sm.OLS(q_vals[i], X).fit()
+            betas[month, i] = res.params[-1]
+            pvalues[month, i] = res.pvalues[-1]
+
+    return betas, pvalues
+
+
 def daily_resampling_windows(array, n_days, n_years):
     """For each entry (i) in array , return the indices in array that corresponds to a
     2D-window centered on i with a length of buffer_days (both directions) and a
@@ -449,6 +502,7 @@ def prepare_resampled_cubes(
     first_idx,
     last_idx,
     delta_temp=-1.0,
+    quantile_shift=False,
     season=None,
 ):
     """Calculate the probability ratio of an event using median scaling/shifting.
@@ -462,9 +516,13 @@ def prepare_resampled_cubes(
     predictor : np.ndarray
         Array of values used a predictor in the regression to the cube data.
     first_idx : int
+        Index of first full year in reampled cube.
     last_idx : int
+        Index of last full year in reampled cube.
     delta_temp : float, default: -1.0
         Temperature difference used to shift the values using the regression coefficients.
+    quantile_shift : bool, default: False
+        Whether to perform a quantile or median shift of the daily data.
     season : string
         Season abbreviation, if seasonal data should be selected,
 
@@ -482,11 +540,17 @@ def prepare_resampled_cubes(
     else:
         cube = orig_cube
 
-    # Get the monthly regression coefficients.
-    betas, _ = compute_monthly_regression_coefs(cube, predictor)
-
-    # Shift the cube data.
-    shifted_cube = shift_cube_data(cube, betas, delta_temp, tqdm=True)
+    # How should we shift the cube data?
+    if quantile_shift:
+        # Get the monthly regression coefficients.
+        betas, _ = compute_monthly_q_regression_coefs(cube, predictor)
+        # Shift the cube data.
+        shifted_cube = q_shift_cube_data(cube, betas, delta_temp)
+    else:
+        # Get the monthly regression coefficients.
+        betas, _ = compute_monthly_regression_coefs(cube, predictor)
+        # Shift the cube data.
+        shifted_cube = shift_cube_data(cube, betas, delta_temp)
 
     if season is not None:
         cube = select_season(cube, season, season)

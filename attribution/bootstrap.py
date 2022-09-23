@@ -263,6 +263,7 @@ def prob_ratio_ds_ci(
     n_years=3,
     predictor=None,
     delta_temp=-1.0,
+    quantile_shift=False,
     season=None,
     alpha=0.05,
     n_resamples=1000,
@@ -296,6 +297,8 @@ def prob_ratio_ds_ci(
         Predictor used for the regression.
     delta_temp : float
         Temperature difference used to shift the cube data.
+    quantile_shift : bool, default: False
+        Wether to quantile shift the cube data, or median shift it.
     season : string
         Season abbreviation, e.g. "mjja". if seasonal data should be selected.
     alpha : float
@@ -341,6 +344,7 @@ def prob_ratio_ds_ci(
         first_idx=first_idx,
         last_idx=last_idx,
         delta_temp=delta_temp,
+        quantile_shift=quantile_shift,
         season=season,
     )
     # We then map the resampled data to the partial function.

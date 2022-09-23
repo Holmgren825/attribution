@@ -208,17 +208,13 @@ def shift_cube_data(cube, betas, delta_temp, tqdm=False):
         Numpy array with monthly correlation coefficients.
     delta_temp : float
         Temperature difference used to shift the cube data.
-    tqdm : bool, default: True
-        Whether to disable the tqdm progressbar or not.
+    tqdm : bool, default: False
+        Whether to use the tqdm progressbar or not.
     """
-    # How many years in the cube?
-    n_years = (
-        cube.coord("time").cell(-1).point.year - cube.coord("time").cell(0).point.year
-    ) + 1
 
     shifted_cube = cube.copy()
     # Loop over each month in the cube.
-    for month in trange(12, disable=tqdm):
+    for month in trange(12, disable=not tqdm):
         # We want to select data for a certain month.
         constraint = iris.Constraint(month_number=month + 1)
         # Do this in a subcube.
@@ -236,5 +232,59 @@ def shift_cube_data(cube, betas, delta_temp, tqdm=False):
         )
         # We then use these indices to overwrite the daily values with the shifted ones.
         shifted_cube.data[indices] = new_vals
+
+    return shifted_cube
+
+
+def q_shift_cube_data(cube, betas, delta_temp, tqdm=False):
+    """Quantile shift the data of a cube according to the temperature difference, following
+    the monthly regression coefficients.
+
+    Arguments
+    ---------
+    cube : iris.cube.Cube
+        Iris cube holding the data to be shifted.
+    betas : np.ndarray
+        Numpy array with monthly correlation coefficients.
+    delta_temp : float
+        Temperature difference used to shift the cube data.
+    tqdm : bool, default: False
+        Whether to display the tqdm progressbar or not.
+    """
+    # How many years in the cube?
+    n_years = (
+        cube.coord("time").cell(-1).point.year - cube.coord("time").cell(0).point.year
+    ) + 1
+
+    shifted_cube = cube.copy()
+    # Loop over each month in the cube.
+    quantiles = np.linspace(0, 1, num=30)
+    # Every month.
+    for month in trange(12, disable=not tqdm):
+        # We want to select data for a certain month.
+        constraint = iris.Constraint(month_number=month + 1)
+        # Do this in a subcube.
+        subcube = shifted_cube.extract(constraint)
+        # Get the data of the subcube.
+        current_data = subcube.data.data
+        # Reshape to get years and nr. of days in month.
+        current_data = current_data.reshape(n_years, -1)
+        # 30 quantiles per month for each year.
+        bins = np.quantile(current_data, quantiles, axis=1).T
+        # Which quantile does the daily data "belong" to,
+        # i.e. which coefficient should be used for the shifting?
+        which_coef = np.array(list(map(np.searchsorted, bins, current_data)))
+
+        # Compute the shifted values.
+        # Shift by -1 degree now.
+        # TODO Move this to a variable.
+        new_vals = current_data + betas[month, which_coef] * delta_temp
+
+        # Then we need to find where in the non-subsetted cube the current data resides.
+        indices = np.searchsorted(
+            shifted_cube.coord("time").points, subcube.coord("time").points
+        )
+        # We then use these indices to overwrite the daily values with the shifted ones.
+        shifted_cube.data[indices] = new_vals.T.flatten()
 
     return shifted_cube
