@@ -280,11 +280,11 @@ def q_shift_cube_data(cube, betas, delta_temp, tqdm=False):
         # TODO Move this to a variable.
         new_vals = current_data + betas[month, which_coef] * delta_temp
 
-        # Then we need to find where in the non-subsetted cube the current data resides.
-        indices = np.searchsorted(
-            shifted_cube.coord("time").points, subcube.coord("time").points
-        )
+        # Find where in the non-subsetted cube the current data resides.
+        indices = np.nonzero(
+            cube.coord("time").points[:, None] == subcube.coord("time").points
+        )[0]
         # We then use these indices to overwrite the daily values with the shifted ones.
-        shifted_cube.data[indices] = new_vals.T.flatten()
+        shifted_cube.data[indices] = new_vals.flatten()
 
     return shifted_cube
