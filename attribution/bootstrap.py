@@ -1,13 +1,21 @@
 import multiprocessing.pool as mpp
 import time
+from functools import partial
 from multiprocessing import Pool
 
 import numpy as np
+import scipy.stats as stats
 from scipy.special import ndtr, ndtri
-
-# Privates..
 from scipy.stats import _resampling as bs
 from tqdm.autonotebook import tqdm
+
+from attribution.funcs import calc_prob_ratio_ds
+from attribution.utils import (
+    compute_index,
+    daily_resampling_windows,
+    get_monthly_gmst,
+    prepare_resampled_cubes,
+)
 
 
 def istarmap(self, func, iterable, chunksize=1):
@@ -243,3 +251,150 @@ def bootstrap_mp(
         median,
         theta_hat_b,
     )
+
+
+def prob_ratio_ds_ci(
+    cube,
+    index,
+    dist,
+    threshold,
+    client,
+    n_days=20,
+    n_years=3,
+    predictor=None,
+    delta_temp=-1.0,
+    season=None,
+    alpha=0.05,
+    n_resamples=1000,
+    rng=None,
+):
+    """Bootstrapping the confidence interval of the probability ratio of
+    an event of the specified threshold using daily scaling. This first creates `n_resamples` random
+    realisations of the cube. The realisations are then regressed against the `predictor` and a copy
+    is shifted according to `delta_temp`. This leaves `n_resamples` pairs of cubes. On each cube the
+    `index` is calculated. The index-cube pairs are then used to calculate the probability ratio of the event.
+    The median of the probability ratio is bootstrapped from the resulting probability ratios (`n_resamples`).
+
+    Arguments
+    ---------
+    cube : iris.cube.Cube
+        Cube containing the data.
+    index : climix.index.Index
+        Prepared climix index. The probability ratio is based on the index series
+        computed based on the cube.
+    dist : scipy.stats.rv_contious
+        Distribution used to represent the data.
+    threshold : float
+        Event threshold.
+    client : dask.distributed.Client
+        Use a dask client to distribute some tasks.
+    n_days : int
+        Number of days in the resampling window.
+    n_years : int
+        Number of years in the resampling window.
+    predicor : numpy.ndarray
+        Predictor used for the regression.
+    delta_temp : float
+        Temperature difference used to shift the cube data.
+    season : string
+        Season abbreviation, e.g. "mjja". if seasonal data should be selected.
+    alpha : float
+        Confidence level.
+    n_resamples : int, default: 1000
+        How many times should the data be resampled.
+    rng : numpy.random.default_rng
+        Random number generator.
+
+    Returns
+    -------
+    scipy.stats.BootstrapResult
+    median : float
+        The median of the bootstrap distribution.
+    prob_ratios : ndarray
+        The probability ratio distribution.
+    """
+
+    # Random number generator.
+    if not rng:
+        rng = np.random.default_rng()
+    # When did we start?
+    print("Resampling cubes.")
+    t0 = time.time()
+    # Get the data from the cube.
+    data = cube.data
+    # Get the daily window.
+    windows, first_idx, last_idx = daily_resampling_windows(data, n_days, n_years)
+    # Sample each daily window randomly, n_resamples times.
+    resampled_windows = rng.choice(windows, axis=1, size=n_resamples).T
+    # Select the resampled data.
+    resampled_data = data[resampled_windows]
+
+    # Get the predictor if none is given.
+    if predictor is None:
+        predictor = get_monthly_gmst(cube[first_idx:last_idx])
+
+    # Create partial for preparing cubes.
+    prepare_cubes_p = partial(
+        prepare_resampled_cubes,
+        orig_cube=cube,
+        predictor=predictor,
+        first_idx=first_idx,
+        last_idx=last_idx,
+        delta_temp=delta_temp,
+        season=season,
+    )
+    # We then map the resampled data to the partial function.
+    with Pool() as p:
+        resampled_cubes = list(
+            tqdm(p.imap(prepare_cubes_p, resampled_data), total=n_resamples)
+        )
+    # We like arrays.
+    resampled_cubes = np.asarray(resampled_cubes)
+    # Get the time.
+    t1 = time.time()
+    runtime = time.strftime("%H:%M:%S", time.gmtime(t1 - t0))
+    print(f"Time to compute: {runtime}")
+
+    print("Computing index cubes")
+    t2 = time.time()
+    # Now we can compute the index cubes.
+    # Current clim.
+    index_cubes = client.map(compute_index, resampled_cubes[:, 0], index=index)
+    index_cubes = client.gather(index_cubes)
+    # Shifted clim.
+    shifted_index_cubes = client.map(compute_index, resampled_cubes[:, 1], index=index)
+    shifted_index_cubes = client.gather(shifted_index_cubes)
+
+    t3 = time.time()
+    runtime = time.strftime("%H:%M:%S", time.gmtime(t3 - t2))
+    print(f"Time to compute: {runtime}")
+
+    # Now that we have all cubes, we can compute the probability ratio for each pair.
+    # We know how many results we need.
+    print("Computing prob. ratios.")
+    t4 = time.time()
+    prob_ratios = client.map(
+        calc_prob_ratio_ds,
+        index_cubes,
+        shifted_index_cubes,
+        dist=dist,
+        threshold=threshold,
+    )
+    # Gather the results.
+    prob_ratios = client.gather(prob_ratios)
+    prob_ratios = np.asarray(prob_ratios)
+    # Remove nans?
+    prob_ratios = prob_ratios[~np.isnan(prob_ratios)]
+    prob_ratios = prob_ratios[~np.isinf(prob_ratios)]
+    t5 = time.time()
+    runtime = time.strftime("%H:%M:%S", time.gmtime(t5 - t4))
+    print(f"Time to compute: {runtime}")
+
+    # Use scipy bootstrap to get the ci of the expected value of the prob ratio.
+    ci = stats.bootstrap((prob_ratios,), np.median, confidence_level=1 - alpha)
+    median = np.median(prob_ratios)
+    # How long did it take?
+    runtime = time.strftime("%H:%M:%S", time.gmtime(time.time() - t0))
+    print(f"Time to compute: {runtime}")
+
+    return ci, median, prob_ratios

@@ -1,11 +1,7 @@
 """Attribution functions."""
 import iris
 import numpy as np
-import statsmodels.api as sm
-from iris_utils import iris_utils
 from tqdm.autonotebook import trange
-
-import attribution.utils
 
 
 def calc_prob_ratio(
@@ -162,77 +158,29 @@ def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     return shape0, loc, scale0
 
 
-def calc_prob_ratio_dms(
-    resampled_data,
-    orig_cube,
-    predictor,
-    index_name,
-    threshold,
-    dist,
-    delta_temp=-1.0,
-    season=None,
-    log_sf=True,
-    client=None,
-    axis=None,
-):
-    """Calculate the probability ratio of an event using median scaling/shifting.
+def calc_prob_ratio_ds(current_cube, counter_cube, dist, threshold, log_sf=True):
+    """Calculate the probability ratio of an event based on two cubes.
 
     Arguments
     ---------
-    resampled_data : np.ndarray
-        An numpy array holding a resampled version of the cube data.
-    orig_cube : iris.cube.Cube
-        Iris cube holding the original timeseries.
-    predictor : np.ndarray
-        Array of values used a predictor in the regression to the cube data.
-    index_name : string
-        Standard name of climte index to compute.
+    current_cube : iris.cube.Cube
+        Iris cube with a climate index timeseries. Assumes that this is the current climate.
+    counter_cube : iris.cube.Cube
+        Iris cube with a climate index timeseries. Assumes that this is holds the counterfactual climate.
+    dist : scipt.stats.rv_contious
+        The distribution used to parametrized the data in the cubes.
     threshold : float
         Event threshold.
-    dist : scipy.stats.rv_contious
-        Distribution used to fit the data.
-    delta_temp : float, default: -1.0
-        Temperature difference used to shift the values using the regression coefficients.
-    season : string
-        Season abbreviation, if seasonal data should be selected,
     log_sf : bool, default: True
-        Compute the log of the survival function.
-    client : dask.distributed.Client
+        Whether to caclulate the log of the survival function or not.
 
     Returns
     -------
-    prob_ratio
+    prob_ratio : float
     """
 
-    # If we have resampled data, we overwrite the cube data.
-    # This assumes that the resampling is done correctly.
-    if resampled_data is not None:
-        orig_cube.data = resampled_data
-
-    # Get the monthly regression coefficients.
-    betas, p_values = attribution.utils.compute_monthly_regression_coefs(
-        orig_cube, predictor
-    )
-
-    # Shift the cube data.
-    shifted_cube = shift_cube_data(orig_cube, betas, delta_temp, tqdm=True)
-
-    if season is not None:
-        orig_cube = attribution.utils.select_season(orig_cube, season, season)
-        shifted_cube = attribution.utils.select_season(shifted_cube, season, season)
-    # Need lazy data.
-    iris_utils.utils.make_lazy(orig_cube)
-    iris_utils.utils.make_lazy(shifted_cube)
-
-    # Compute the index for both cubes..
-    index_cube = attribution.utils.compute_index(orig_cube, index_name, client)
-    shifted_index_cube = attribution.utils.compute_index(
-        shifted_cube, index_name, client
-    )
-
-    # Then we can fit the distributions.
-    fit1 = dist.fit(index_cube.data)
-    fit0 = dist.fit(shifted_index_cube.data)
+    fit1 = dist.fit(current_cube.data)
+    fit0 = dist.fit(counter_cube.data)
 
     if log_sf:
         p1 = dist.logsf(threshold, *fit1)

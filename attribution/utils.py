@@ -8,10 +8,12 @@ import iris_utils
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from dask.distributed import get_client
 from iris.exceptions import CoordinateNotFoundError
 from tqdm.autonotebook import trange
 
 from attribution.config import init_config
+from attribution.funcs import shift_cube_data
 
 
 def select_season(cube, season_abbr, season_name="season"):
@@ -60,7 +62,7 @@ def select_season(cube, season_abbr, season_name="season"):
 def compute_index(
     cube,
     index,
-    client,
+    client=None,
     spatial_average=False,
     spatial_max=False,
 ):
@@ -85,6 +87,8 @@ def compute_index(
 
     """
 
+    if client is None:
+        client = get_client()
     # Prepare the cube.
     # Can't have a "year" coordinate.
     try:
@@ -391,3 +395,101 @@ def compute_monthly_regression_coefs(cube, monthly_predictor):
         p_values[i] = res.pvalues[-1]
 
     return betas, p_values
+
+
+def daily_resampling_windows(array, n_days, n_years):
+    """For each entry (i) in array , return the indices in array that corresponds to a
+    2D-window centered on i with a length of buffer_days (both directions) and a
+    "height" of buffer_years (both directions).
+
+    Assumes a year in array has 365 days.
+
+    Arguments
+    ---------
+    array : np.ndarray
+        1d array of daily data.
+    n_days : int
+        Number of days to buffer in each direction.
+    n_years : int
+        Number of years to buffer in each direction.
+
+    Returns
+    -------
+    windows : np.ndarray
+    first_idx : int
+        First index with only valid data.
+    last_idx : int
+        Last index with only valid data.
+    """
+    # Daily indices 0..n
+    indices = np.arange(array.shape[0]).reshape(-1, 1, 1)
+    # Number of neighbouring years e.g. -3, -2, ..., 2, 3
+    years = np.arange(-n_years, n_years).reshape(1, -1, 1)
+    # Number of neighbouring days.
+    days = np.arange(-n_days, n_days).reshape(1, 1, -1)
+
+    # This creates the windows. Broadcasting is awesome
+    windows = indices + days + years * 365
+    # Flatten the 2nd and 3rd dimension.
+    windows = windows.reshape(-1, years.shape[1] * days.shape[2])
+    # First index with only valid indices
+    # first_idx = np.argwhere(windows == 0)[-1][0]
+    first_idx = (n_years + 1) * 365
+    # Last index with only valid indices
+    # last_idx = np.argwhere(windows == array.shape[0])[0][0]
+    last_idx = array.shape[0] - (n_years + 1) * 365
+
+    return windows[first_idx:last_idx], first_idx, last_idx
+
+
+def prepare_resampled_cubes(
+    resampled_data,
+    orig_cube,
+    predictor,
+    first_idx,
+    last_idx,
+    delta_temp=-1.0,
+    season=None,
+):
+    """Calculate the probability ratio of an event using median scaling/shifting.
+
+    Arguments
+    ---------
+    resampled_data : np.ndarray
+        An numpy array holding a resampled version of the cube data.
+    orig_cube : iris.cube.Cube
+        Iris cube holding the original timeseries.
+    predictor : np.ndarray
+        Array of values used a predictor in the regression to the cube data.
+    first_idx : int
+    last_idx : int
+    delta_temp : float, default: -1.0
+        Temperature difference used to shift the values using the regression coefficients.
+    season : string
+        Season abbreviation, if seasonal data should be selected,
+
+    Returns
+    -------
+    cube, shifted_cube
+    """
+
+    # If we have resampled data, we overwrite the cube data.
+    # This assumes that the resampling is done correctly.
+    if resampled_data is not None:
+        cube = orig_cube.copy()
+        cube.data[first_idx:last_idx] = resampled_data
+        cube = cube[first_idx:last_idx]
+    else:
+        cube = orig_cube
+
+    # Get the monthly regression coefficients.
+    betas, _ = compute_monthly_regression_coefs(cube, predictor)
+
+    # Shift the cube data.
+    shifted_cube = shift_cube_data(cube, betas, delta_temp, tqdm=True)
+
+    if season is not None:
+        cube = select_season(cube, season, season)
+        shifted_cube = select_season(shifted_cube, season, season)
+
+    return cube, shifted_cube
