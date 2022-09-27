@@ -278,7 +278,9 @@ def get_gmst(cube, path=None, window=4):
     return gmst_data
 
 
-def get_monthly_gmst(cube=None, path=None, window=4, return_df=False):
+def get_monthly_gmst(
+    cube=None, path=None, n_hemisphere=False, window=4, return_df=False
+):
     """Get the monthly gmst timeseries for the corresponding cube.
 
     Arguments
@@ -287,6 +289,8 @@ def get_monthly_gmst(cube=None, path=None, window=4, return_df=False):
         Used to get the timespan.
     path : string, optional.
         Path/url MST data.
+    n_hemisphere : bool, default: False
+        Use northern hemisphere data.
     window : int
         Size of smoothing window in years.
     return_df : bool, defaul: False
@@ -296,46 +300,66 @@ def get_monthly_gmst(cube=None, path=None, window=4, return_df=False):
     -------
     gmst_data : np.ndarray
     """
-    url = "https://data.giss.nasa.gov/gistemp/graphs_v4/graph_data/Monthly_Mean_Global_Surface_Temperature/graph.txt"
-    if not path:
-        df = pd.read_csv(
-            # Load in the dataset.
-            url,
-            sep=r"\s+",
-            header=2,
-        )
-    else:
+    # Use northern hemisphere data?
+    if not n_hemisphere:
+        # Path?
+        if path is None:
+            path = "https://data.giss.nasa.gov/gistemp/graphs_v4/graph_data/Monthly_Mean_Global_Surface_Temperature/graph.txt"
         df = pd.read_csv(
             # Load in the dataset.
             path,
             sep=r"\s+",
             header=2,
         )
-    # Drop the first row.
-    df = df.drop(0)
+        # Drop the first row.
+        df = df.drop(0)
 
-    # Wrangling to get an datetime index.
-    date_df = df["Year+Month"].str.split(".", expand=True)
+        # Wrangling to get an datetime index.
+        date_df = df["Year+Month"].str.split(".", expand=True)
 
-    # Month is in decimal format.
-    month = date_df[1].astype(int) / 100
+        # Month is in decimal format.
+        month = date_df[1].astype(int) / 100
 
-    # We round it to zero and multiply with 12 to get it on the form "m".
-    month = np.around((month + 0.04) * 12).astype(int)
-    # Replace the old month.
-    date_df[1] = month
+        # We round it to zero and multiply with 12 to get it on the form "m".
+        month = np.around((month + 0.04) * 12).astype(int)
+        # Replace the old month.
+        date_df[1] = month
 
-    # Combine them columns again and convert to datetime.
-    df["datetime"] = pd.to_datetime(
-        date_df[0].astype(str) + "-" + date_df[1].astype(str), format="%Y-%m"
-    )
+        # Combine them columns again and convert to datetime.
+        df["datetime"] = pd.to_datetime(
+            date_df[0].astype(str) + "-" + date_df[1].astype(str), format="%Y-%m"
+        )
 
-    # No longer need the old date column
-    df = df.drop(columns="Year+Month")
-    # And set the new one as the index.
-    df = df.set_index("datetime")
+        # No longer need the old date column
+        df = df.drop(columns="Year+Month")
+        # And set the new one as the index.
+        df = df.set_index("datetime")
 
-    # Smooth it
+    # Use northern hemisphere data instead.
+    else:
+        if path is None:
+            path = "https://data.giss.nasa.gov/gistemp/tabledata_v4/NH.Ts+dSST.csv"
+        # Read data.
+        df = pd.read_csv(
+            # Load in the dataset.
+            path,
+            sep=",",
+            header=1,
+            na_values="***",
+        )
+        # Create the index.
+        # From first year to last year of the data, left inclusive so that the
+        # start of next year is not included.
+        index = pd.date_range(
+            str(df.iloc[0, 0]), str(df.iloc[-1, 0] + 1), freq="MS", inclusive="left"
+        )
+        # Get the data.
+        data = df.iloc[:, 1:13].to_numpy().flatten()
+
+        # Create a new dataframe. We name it for ease of use later.
+        df = pd.DataFrame(data=data, index=index, columns=["Land+Ocean"])
+
+    # Now we can smooth the data.
     df = df.rolling(window * 12, center=False).mean()
 
     if cube:
