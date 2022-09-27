@@ -6,24 +6,30 @@ Work in progress.
 Clone and install with `pip install -e .`
 
 ### Dependencies
-- iris
-- dask
-- geopandas
 - cartopy
 - [climix](https://git.smhi.se/climix/climix)
-- scipy
+- dask
+- geopandas
+- iris
 - iris_utils: Small helper package available [here](https://github.com/Holmgren825/iris_utils).
+- scipy
 
 ## Modules
 
 ### preprocessing
-Contains functions to pre-process datasets for the study.
+Contains functions used in pre-processing datasets for the study. Currently supported datasets:
+  1. GridClim
+  2. E-OBS
+  3. Euro-Cordex
 
 ### validation
-Scores used to validate model data against observations.
+A collection of metrics used to validate the models against gridded observations.
 
 ### bootstrap
-A customised bootstrap function which computes the bca interval. Adapted from scipy to distribute tasks on a dask.distributed client.
+Functions used to perform distributed bootstrap calculations of attribution functions.
 
 ### funcs
 Contains functions for distribution scaling/shifting and computing the probability ratio of an event.
+
+### utils
+A collection of utility functions used by other modules.
