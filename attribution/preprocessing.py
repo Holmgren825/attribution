@@ -25,8 +25,8 @@ from attribution.utils import get_country_shape
 def extract_partial_date(cube, date0, date1):
     """To be used for cube extractions in parallel for cubes in a list.
 
-    Arguments:
-    ----------
+    Arguments
+    ---------
     cube : iris.cube.Cube
         Cube to perform the extraction.
     date0 : list(ints)
@@ -52,16 +52,20 @@ def extract_partial_date(cube, date0, date1):
     return cube.extract(time_constraint)
 
 
-def region_selection(cube, roi_points):
+def region_selection(
+    cube, roi_points, coord_names={"lat": "grid_latitude", "lon": "grid_longitude"}
+):
     """Select data from a region of interest in the cube based on corner points.
 
-    Arguments:
-    ----------
+    Arguments
+    ---------
     cube : iris.cube.Cube
         Cube holding the data.
     roi_points : array_like(4)
         Points for longitude and latitude extent.
         [N, S, E, W] e.g [58, 55, 18, 11]
+    coord_names : dict, default {"lat": "grid_latitude", "lon": "grid_longitude"}
+        Spcify the name of latitude and longitude coordinate in the cube.
 
     Returns:
     --------
@@ -79,12 +83,14 @@ def region_selection(cube, roi_points):
     )
     # Create the constraint.
     region_constraint = iris.Constraint(
-        grid_latitude=lambda v: transformed_points[:, 1].min()
-        < v
-        < transformed_points[:, 1].max(),
-        grid_longitude=lambda v: transformed_points[:, 0].min()
-        < v
-        < transformed_points[:, 0].max(),
+        coord_values={
+            coord_names["lat"]: lambda v: transformed_points[:, 1].min()
+            < v
+            < transformed_points[:, 1].max(),
+            coord_names["lon"]: lambda v: transformed_points[:, 0].min()
+            < v
+            < transformed_points[:, 0].max(),
+        }
     )
 
     # Extract the roi
@@ -92,30 +98,35 @@ def region_selection(cube, roi_points):
     return cube
 
 
-def load_gridclim(gridclim_path=None, variable=None, time_range=None):
+def load_gridclim(gridclim_path=None, variable=None, partial_dates=None):
     """Load the gridclim data.
 
-    Agruments:
-    ----------
+    Agruments
+    ---------
     griclim_path : string, optional
         Path to GridClim data. Will read from config.yml by default.
     variable : string, optional
         Which variable to read. Will read from config.yml by default.
-    time_range : array_like, optional
-        Sequence of years describing the lower and upper range of the timespan.
-        Will read from config.yml by default.
+    partial_dates : dict, optional
+        Dictionary holding the parts of partial dates used to constrain the data.
+        E.g.
+        {
+        "low": {"year": 1985, "month", 12},
+        "high": {"year": 2012, "month": 5, "day": 20}
+        }
+        By default read from config.yml. If False no time extraction is done.
 
-    Returns:
-    --------
+    Returns
+    -------
     gc_cube : iris.Cube.cube
         Iris cube with GridClim data.
     """
+    # Load the config.
+    CFG = init_config()
 
     # Path to gridclim?
     # If we have a path to gridclim we assume it is complete with the variable.
     if gridclim_path is None:
-        # Load the config.
-        CFG = init_config()
         # Do we have the variable?
         if variable is None:
             variable = CFG["variable"]
@@ -125,11 +136,8 @@ def load_gridclim(gridclim_path=None, variable=None, time_range=None):
         gridclim_path = os.path.join(gridclim_path, variable)
 
     # Do we have partial dates.
-    if time_range is None:
-        time_range = [
-            CFG["partial_dates"]["low"]["year"],
-            CFG["partial_dates"]["high"]["year"],
-        ]
+    if partial_dates is None:
+        partial_dates = CFG["partial_dates"]
     # This gives a list of files in the base path matchig the wildcard.
     files = glob.glob(gridclim_path + "/*.nc")
     # Create a cube.
@@ -141,12 +149,12 @@ def load_gridclim(gridclim_path=None, variable=None, time_range=None):
     # We concat on time.
     gc_cube = cube.concatenate_cube()
 
-    # Create a time constraint
-    time_constraint = iris.Constraint(
-        time=lambda cell: time_range[0] <= cell.point.year <= time_range[1]
-    )
-    # Extract time range.
-    gc_cube = gc_cube.extract(time_constraint)
+    # Only extract time if we have a time_range
+    if partial_dates:
+        # Extract time range.
+        gc_cube = extract_partial_date(
+            gc_cube, date0=partial_dates["low"], date1=partial_dates["high"]
+        )
 
     return gc_cube
 
@@ -162,49 +170,45 @@ def prepare_gridclim_cube(
     return_cube=False,
 ):
     """Prepare an iris cube over a selected region and timespan with data
-    from the GridClim product.
+    from the GridClim dataset.
 
-    Arguments:
-    ----------
-    gridclim_base_path : string
+    Arguments
+    ---------
+    gridclim_base_path : string, optional
         Path to a directory containing files for the cordex ensemble members.
-        Default: None. Parse from config.yml
-    gridclim_filename : string
+        Parsed from config.yml by default.
+    gridclim_filename : string, optional
         Filename which to save the selected dataset to.
-        Default: None. Parse from config.yml
-    variable : string
+        Parsed from config.yml by default.
+    variable : string, optional
         CF standard name of the variable.
-    project_path : string
+        Parsed from config.yml by default.
+    project_path : string, optional
         Where to save the prepared cube.
-    shapefile : string
+        Parsed from config.yml by default.
+    shapefile : string, optional
         Path to shapefile
-    partial_dates : dict
+        Parsed from config.yml by default.
+    partial_dates : dict, optional
         Dictionary holding the parts of partial dates used to constrain the data.
-        E.g. {
+        E.g.
+        {
         "low": {"year": 1985, "month", 12},
         "high": {"year": 2012, "month": 5, "day": 20}
         }
-    roi_points : array_like(4)
-        Points for longitude and latitude extent. Optional.
-        [N, S, E, W] e.g [58, 55, 18, 11]
-    return_cube : False
-        Whether to return the cube after saving it. Default: False
-
+        By default read from config.yml. If False no time extraction is done.
+    roi_points : array_like(4), optional
+        Points for longitude and latitude extents: [N, S, E, W] = [58, 55, 18, 11].
+        By default read from config.yml. If False no spatial extraction is done.
+    return_cube : bool, default: False
+        Whether to return the cube after saving it.
     """
     # Get the configuration
     CFG = init_config()
 
-    # This file contains shapes of most countries in the world.
-    # https://www.naturalearthdata.com/downloads/10m-cultural-vectors/10m-admin-0-boundary-lines/
     if not shapefile:
         shapefile = CFG["paths"]["shapefile"]
-
-    gdf = gpd.read_file(shapefile)
-
-    # Select Sweden.
-    # TODO  This should be in config somehow maybe?
-    swe_shapes = gdf[gdf.SOVEREIGNT == "Sweden"].geometry
-    swe_mainland = swe_shapes.iloc[0].geoms[0]
+    swe_mainland = get_country_shape(shapefile=shapefile)
     # What variable are we using?
     if not variable:
         variable = CFG["variable"]
@@ -217,20 +221,19 @@ def prepare_gridclim_cube(
     gridclim_path = os.path.join(gridclim_path, variable)
 
     # Do we have partial dates.
-    if not partial_dates:
-        time_range = [
-            CFG["partial_dates"]["low"]["year"],
-            CFG["partial_dates"]["high"]["year"],
-        ]
+    if partial_dates is None:
         partial_dates = CFG["partial_dates"]
 
     # Load the GridClim cube.
-    gc_cube = load_gridclim(gridclim_path, time_range=time_range)
+    gc_cube = load_gridclim(gridclim_path, partial_dates=partial_dates)
 
-    # Extract roi
-    if not roi_points:
+    # Any roi_poins?
+    if roi_points is None:
         roi_points = list(CFG["roi_mask"].values())
-    gc_cube = region_selection(gc_cube, roi_points)
+    # If we have roi points by now, extract them.
+    # If False, no selection is done.
+    if roi_points:
+        gc_cube = region_selection(gc_cube, roi_points)
 
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
@@ -283,49 +286,46 @@ def prepare_eobs_cube(
     """Prepare an iris cube over a selected region and timespan with data
     from the EOBS product.
 
-    Arguments:
-    ----------
-    eobs_base_path : string
+    Arguments
+    ---------
+    eobs_base_path : string, optional
         Path to a directory containing files for the eobs product.
-        Default: None. Parse from config.yml
-    eobs_filename : string
+        Parsed from config.yml by default.
+    eobs_filename : string, optional
         Filename which to save the selected dataset to.
-        Default: None. Parse from config.yml
-    variable : string
+        Parsed from config.yml by default.
+    variable : string, optional
         CF standard name of the variable.
-    project_path : string
+        Parsed from config.yml by default.
+    project_path : string, optional
         Where to save the prepared cube.
-    shapefile : string
+        Parsed from config.yml by default.
+    shapefile : string, optional
         Path to shapefile
-    gridclim_path : string
+        Parsed from config.yml by default.
+    gridclim_path : string, optional
         Path to gridclim data.
-    partial_dates : dict
+        Parsed from config.yml by default.
+    partial_dates : dict, optional
         Dictionary holding the parts of partial dates used to constrain the data.
-        E.g. {
+        E.g.
+        {
         "low": {"year": 1985, "month", 12},
         "high": {"year": 2012, "month": 5, "day": 20}
         }
-    roi_points : array_like(4)
-        Points for longitude and latitude extent. Optional.
-        [N, S, E, W] e.g [58, 55, 18, 11]
-    return_cube : bool
-        Wheter to return the cube after saving it. Default: False.
-
+        By default read from config.yml. If False no time extraction is done.
+    roi_points : array_like(4), optional
+        Points for longitude and latitude extents: [N, S, E, W] = [58, 55, 18, 11].
+        By default read from config.yml. If False no spatial extraction is done.
+    return_cube : bool, default: False
+        Whether to return the cube after saving it.
     """
 
     # Get the configuration
     CFG = init_config()
-    # This file contains shapes of most countries in the world.
-    # https://www.naturalearthdata.com/downloads/10m-cultural-vectors/10m-admin-0-boundary-lines/
     if not shapefile:
         shapefile = CFG["paths"]["shapefile"]
-
-    gdf = gpd.read_file(shapefile)
-
-    # Select Sweden.
-    # TODO  This should be in config somehow maybe?
-    swe_shapes = gdf[gdf.SOVEREIGNT == "Sweden"].geometry
-    swe_mainland = swe_shapes.iloc[0].geoms[0]
+    swe_mainland = get_country_shape(shapefile=shapefile)
     # What variable are we using?
     if not variable:
         variable = CFG["variable"]
@@ -338,15 +338,11 @@ def prepare_eobs_cube(
     gridclim_path = os.path.join(gridclim_path, variable)
 
     # Do we have partial dates.
-    if not partial_dates:
-        time_range = [
-            CFG["partial_dates"]["low"]["year"],
-            CFG["partial_dates"]["high"]["year"],
-        ]
+    if partial_dates is None:
         partial_dates = CFG["partial_dates"]
 
     # Load GridClim.
-    gc_cube = load_gridclim(gridclim_path, time_range=time_range)
+    gc_cube = load_gridclim(gridclim_path, partial_dates=partial_dates)
 
     # Load in the CORDEX ensemble.
     print("Loading EOBS")
@@ -373,10 +369,11 @@ def prepare_eobs_cube(
     print("Extracting domain")
     eobs_cube = eobs_cube.extract(constraint)
 
-    print("Extracting timespan")
-    eobs_cube = extract_partial_date(
-        eobs_cube, date0=partial_dates["low"], date1=partial_dates["high"]
-    )
+    if partial_dates:
+        print("Extracting timespan")
+        eobs_cube = extract_partial_date(
+            eobs_cube, date0=partial_dates["low"], date1=partial_dates["high"]
+        )
 
     # Mask Sweden
     # Create a mask.
@@ -387,15 +384,15 @@ def prepare_eobs_cube(
         coord_names=("grid_latitude", "grid_longitude"),
     )
 
-    # TODO replace with iris.utils when it is lazy.
     eobs_cube = iris.util.mask_cube(eobs_cube, mask)
 
-    # Select roi
-    if not roi_points:
+    # Any roi points?
+    if roi_points is None:
         roi_points = list(CFG["roi_mask"].values())
 
-    eobs_cube = region_selection(eobs_cube, roi_points)
-    # gc_cube = region_selection(gc_cube, roi_points)
+    # If False we don't extract.
+    if roi_points:
+        eobs_cube = region_selection(eobs_cube, roi_points)
 
     print("Saving cube")
     # Where to store the file
@@ -625,6 +622,145 @@ def prepare_cordex_cube(
 
     if return_cube:
         return cordex_cube
+
+
+def prepare_pthbv(
+    path=None,
+    filename=None,
+    variable=None,
+    project_path=None,
+    shapefile=None,
+    partial_dates=None,
+    roi_points=None,
+    return_cube=False,
+):
+    """Prepare an iris cube over a selected region and timespan with data
+    from the PTHBV dataset.
+
+    Arguments
+    ---------
+    path : string, optional
+        Path to a directory containing files for the PTHBV data.
+        Parse from config.yml
+    filename : string, optional
+        Filename which to save the selected dataset to.
+        Parse from config.yml
+    variable : string, optional
+        CF standard name of the variable.
+        Parsed from config.yml by default.
+    project_path : string, optional
+        Where to save the prepared cube.
+        Parsed from config.yml by default.
+    shapefile : string, optional
+        Path to shapefile
+        Parsed from config.yml by default.
+    partial_dates : dict, optional
+        Dictionary holding the parts of partial dates used to constrain the data.
+        E.g.
+        {
+        "low": {"year": 1985, "month", 12},
+        "high": {"year": 2012, "month": 5, "day": 20}
+        }
+        By default read from config.yml. If False no time extraction is done.
+    roi_points : array_like(4), optional
+        Points for longitude and latitude extents: [N, S, E, W] = [58, 55, 18, 11].
+        By default read from config.yml. If False no spatial extraction is done.
+    return_cube : bool, default: False
+        Whether to return the cube after saving it.
+    """
+    # Get the configuration
+    CFG = init_config()
+
+    if not shapefile:
+        shapefile = CFG["paths"]["shapefile"]
+    swe_mainland = get_country_shape(shapefile=shapefile)
+
+    # What variable are we using?
+    # Have to map the CF variable to the name used in pthbv
+    if not variable:
+        variable_cf = CFG["variable"]
+        if variable_cf == "pr":
+            variable = "_p_"
+        elif variable_cf == "tas":
+            variable = "_t_"
+        else:
+            raise ValueError("Variable not available.")
+
+    # Path to the data.
+    if path is None:
+        path = CFG["paths"]["data"]["pthbv"]
+
+    # A lot of wildcards here since the data is in folders of years and months.
+    # And archive/realtime
+    # TODO Concatenating ~22000 files is very slow. This should be done in the raw data.
+    files = glob.glob(path + f"*{variable}*.nc")
+    print("Loading PTHBV")
+    iris.FUTURE.datum_support = True
+    cube = iris.load(files)
+    # Equalise the attributes.
+    _ = iris.util.equalise_attributes(cube)
+    cube = cube.concatenate_cube()
+
+    # Do we have partial dates?
+    if partial_dates is None:
+        partial_dates = CFG["partial_dates"]
+
+    # We only extract time if we now have partial dates, either by config or user.
+    # If partial_dates = False, we don't to the extraction.
+    if partial_dates:
+        cube = extract_partial_date(
+            cube, date0=partial_dates["low"], date1=partial_dates["high"]
+        )
+
+    # Non default roi points?
+    if roi_points is None:
+        roi_points = list(CFG["roi_mask"].values())
+    # Only extract if we by now have roi points.
+    if roi_points:
+        cube = region_selection(
+            cube,
+            roi_points,
+            coord_names={
+                "lat": "projection_y_coordinate",
+                "lon": "projection_x_coordinate",
+            },
+        )
+
+    # Create a mask.
+    # mask from shape cant handle the 4d cube so we have to do this manually for now.
+    mask = iris_utils.utils.mask_from_shape(
+        cube,
+        swe_mainland,
+        # Relies on CF convention.
+        coord_names=("projection_y_coordinate", "projection_x_coordinate"),
+    )
+
+    cube = iris.util.mask_cube(cube, mask)
+
+    print("Saving cube")
+    # Where to store the file
+    if not project_path:
+        project_path = CFG["paths"]["project_folder"]
+    # The filename is made up of multiple components of CFG.
+    if not filename:
+        basename = CFG["filenames"]["pthbv"]
+        project_name = CFG["project_name"]
+        # Get the timestamp
+        t0 = cube.coord("time").cell(0).point.strftime("%Y%m%d")
+        t1 = cube.coord("time").cell(-1).point.strftime("%Y%m%d")
+        timestamp = t0 + "-" + t1
+
+        # Join the parts
+        filename = "_".join([variable_cf, project_name, basename, timestamp])
+        # Add format
+        filename += ".nc"
+    # Saving the prepared cubes.
+    with dask.config.set(scheduler="synchronous"):
+        iris.save(cube, os.path.join(project_path, filename))
+    print("Finished")
+
+    if return_cube:
+        return cube
 
 
 def main():
