@@ -9,18 +9,17 @@ from multiprocessing import Pool
 
 import cartopy.crs as ccrs
 import dask
-import dask.distributed
-import geopandas as gpd
 import iris
 import iris.coord_categorisation
 import iris.util
-import iris_utils
+import iris_utils.utils
 import numpy as np
 from dask.distributed import Client
 from iris.exceptions import CoordinateNotFoundError
 from iris.time import PartialDateTime
 
 from attribution.config import init_config
+from attribution.utils import get_country_shape
 
 
 def extract_partial_date(cube, date0, date1):
@@ -235,7 +234,7 @@ def prepare_gridclim_cube(
 
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
-    mask = iris_utils.mask_from_shape(
+    mask = iris_utils.utils.mask_from_shape(
         gc_cube,
         swe_mainland,
         # Relies on CF convention.
@@ -382,7 +381,7 @@ def prepare_eobs_cube(
     # Mask Sweden
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
-    mask = iris_utils.mask_from_shape(
+    mask = iris_utils.utils.mask_from_shape(
         eobs_cube,
         swe_mainland,
         coord_names=("grid_latitude", "grid_longitude"),
@@ -554,7 +553,7 @@ def prepare_cordex_cube(
     # Mask Sweden
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
-    mask = iris_utils.mask_from_shape(
+    mask = iris_utils.utils.mask_from_shape(
         cordex_cube[0, :, :, :],
         swe_mainland,
         coord_names=("grid_latitude", "grid_longitude"),
