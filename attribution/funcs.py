@@ -158,7 +158,9 @@ def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     return shape0, loc, scale0
 
 
-def calc_prob_ratio_ds(current_cube, counter_cube, dist, threshold, log_sf=True):
+def calc_prob_ratio_ds(
+    current_cube, counter_cube, dists, threshold_quantile, log_sf=True
+):
     """Calculate the probability ratio of an event based on two cubes.
 
     Arguments
@@ -167,10 +169,10 @@ def calc_prob_ratio_ds(current_cube, counter_cube, dist, threshold, log_sf=True)
         Iris cube with a climate index timeseries. Assumes that this is the current climate.
     counter_cube : iris.cube.Cube
         Iris cube with a climate index timeseries. Assumes that this is holds the counterfactual climate.
-    dist : scipt.stats.rv_contious
-        The distribution used to parametrized the data in the cubes.
-    threshold : float
-        Event threshold.
+    dists : dict
+        The distributions (scipy.stats.rv_contious) evaluated and used to parametrized the data in the cubes.
+    threshold_quantile : float
+        Quantile event threshold.
     log_sf : bool, default: True
         Whether to caclulate the log of the survival function or not.
 
@@ -179,14 +181,21 @@ def calc_prob_ratio_ds(current_cube, counter_cube, dist, threshold, log_sf=True)
     prob_ratio : float
     """
 
+    #  Which distribution should be used?
+    dist = select_distribution(current_cube.data, dists)
+
+    # Fit the data
     fit1 = dist.fit(current_cube.data)
+    # Get the threshold through the inverse survival funciton.
+    threshold = dist.isf(threshold_quantile, *fit1)
+    # Fit the counterfactual climate.
     fit0 = dist.fit(counter_cube.data)
 
     if log_sf:
         p1 = dist.logsf(threshold, *fit1)
         p0 = dist.logsf(threshold, *fit0)
 
-        prob_ratio = np.exp(p0 / p1)
+        prob_ratio = p1 - p0
 
     else:
         p1 = dist.sf(threshold, *fit1)

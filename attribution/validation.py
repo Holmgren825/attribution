@@ -408,3 +408,14 @@ def inspect_distributions(
             plt.legend()
 
     return ks_results
+
+
+def select_distribution(data: np.ndarray, dists: dict):
+    # Evaluate distribution for the member
+    dist_eval = inspect_distributions(data, dists, plot=False)
+    # We select the one with the highest p-value.
+    dist_idx = np.asarray([res.pvalue for res in dist_eval.values()]).argmax()
+    # Get the key. This is ugly.
+    dist = dists[list(dists.keys())[dist_idx]]
+
+    return dist

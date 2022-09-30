@@ -4,18 +4,16 @@ from functools import partial
 from multiprocessing import Pool
 
 import numpy as np
-import scipy.stats as stats
-from scipy.special import ndtr, ndtri
-from scipy.stats import _resampling as bs
 from tqdm.autonotebook import tqdm
 
-from attribution.funcs import calc_prob_ratio_ds
+from attribution.funcs import calc_prob_ratio, calc_prob_ratio_ds
 from attribution.utils import (
     compute_index,
     daily_resampling_windows,
     get_monthly_gmst,
     prepare_resampled_cubes,
 )
+from attribution.validation import select_distribution
 
 
 def istarmap(self, func, iterable, chunksize=1):
@@ -199,16 +197,18 @@ def prob_ratio_ci(
 def prob_ratio_ds_ci(
     cube,
     index,
-    dist,
-    threshold,
+    dists,
+    threshold_quantile,
     client,
     n_days=20,
     n_years=3,
     predictor=None,
+    n_hemisphere=True,
     delta_temp=-1.0,
     quantile_shift=False,
     season=None,
     alpha=0.05,
+    log_sf=True,
     n_resamples=1000,
     rng=None,
 ):
@@ -226,10 +226,11 @@ def prob_ratio_ds_ci(
     index : climix.index.Index
         Prepared climix index. The probability ratio is based on the index series
         computed based on the cube.
-    dist : scipy.stats.rv_contious
-        Distribution used to represent the data.
-    threshold : float
-        Event threshold.
+    dists : dict
+        Dictionary holding scipy.stats.rv_contionous distributions. These are evaluated
+        and used to represent the data.
+    threshold_quantile : float
+        Quantile of the event threshold in observations.
     client : dask.distributed.Client
         Use a dask client to distribute some tasks.
     n_days : int
@@ -238,12 +239,16 @@ def prob_ratio_ds_ci(
         Number of years in the resampling window.
     predicor : numpy.ndarray
         Predictor used for the regression.
+    n_hemisphere : bool, defaul: True
+        Use northern hemisphere mst data.
     delta_temp : float
         Temperature difference used to shift the cube data.
     quantile_shift : bool, default: False
         Wether to quantile shift the cube data, or median shift it.
     season : string
         Season abbreviation, e.g. "mjja". if seasonal data should be selected.
+    log_sf : bool, default: True
+        Whether to calculate the log survival function or not.
     alpha : float
         Confidence level.
     n_resamples : int, default: 1000
@@ -253,11 +258,10 @@ def prob_ratio_ds_ci(
 
     Returns
     -------
-    scipy.stats.BootstrapResult
-    median : float
-        The median of the bootstrap distribution.
-    prob_ratios : ndarray
-        The probability ratio distribution.
+    prob_ratio_ci : numpy.ndarray
+        Quantiles [alpha, 0.25, 0.5, 0.75, 1 - alpha]
+    theta_hat_b : numpy.ndarray
+        The bootstrap distribution.
     """
 
     # Random number generator.
@@ -277,7 +281,9 @@ def prob_ratio_ds_ci(
 
     # Get the predictor if none is given.
     if predictor is None:
-        predictor = get_monthly_gmst(cube[first_idx:last_idx])
+        predictor = get_monthly_gmst(
+            cube[first_idx:last_idx], n_hemisphere=n_hemisphere
+        )
 
     # Create partial for preparing cubes.
     prepare_cubes_p = partial(
@@ -305,10 +311,13 @@ def prob_ratio_ds_ci(
     print("Computing index cubes")
     t2 = time.time()
     # Now we can compute the index cubes.
+    # 0th column of resampled_cubes holds the current climate
     # Current clim.
     index_cubes = client.map(compute_index, resampled_cubes[:, 0], index=index)
     index_cubes = client.gather(index_cubes)
     # Shifted clim.
+    # 1st column of resampled_cubes holds the shifted climate
+    print("Computing shifted index cubes")
     shifted_index_cubes = client.map(compute_index, resampled_cubes[:, 1], index=index)
     shifted_index_cubes = client.gather(shifted_index_cubes)
 
@@ -320,28 +329,34 @@ def prob_ratio_ds_ci(
     # We know how many results we need.
     print("Computing prob. ratios.")
     t4 = time.time()
-    prob_ratios = client.map(
+    theta_hat_b = client.map(
         calc_prob_ratio_ds,
         index_cubes,
         shifted_index_cubes,
-        dist=dist,
-        threshold=threshold,
+        dists=dists,
+        threshold_quantile=threshold_quantile,
+        log_sf=log_sf,
     )
     # Gather the results.
-    prob_ratios = client.gather(prob_ratios)
-    prob_ratios = np.asarray(prob_ratios)
+    theta_hat_b = client.gather(theta_hat_b)
+    theta_hat_b = np.asarray(theta_hat_b)
     # Remove nans?
-    prob_ratios = prob_ratios[~np.isnan(prob_ratios)]
-    prob_ratios = prob_ratios[~np.isinf(prob_ratios)]
+    theta_hat_b = theta_hat_b[~np.isnan(theta_hat_b)]
+    theta_hat_b = theta_hat_b[~np.isinf(theta_hat_b)]
     t5 = time.time()
     runtime = time.strftime("%H:%M:%S", time.gmtime(t5 - t4))
     print(f"Time to compute: {runtime}")
 
-    # Use scipy bootstrap to get the ci of the expected value of the prob ratio.
-    ci = stats.bootstrap((prob_ratios,), np.median, confidence_level=1 - alpha)
-    median = np.median(prob_ratios)
+    # Did we compute the log_sf?
+    if log_sf:
+        # If we did, take the exponent of the quantiles.
+        prob_ratio_ci = np.exp(
+            np.quantile(theta_hat_b, [alpha, 0.25, 0.5, 0.75, 1 - alpha])
+        )
+    else:
+        prob_ratio_ci = np.quantile(theta_hat_b, [alpha, 0.25, 0.5, 0.75, 1 - alpha])
     # How long did it take?
     runtime = time.strftime("%H:%M:%S", time.gmtime(time.time() - t0))
     print(f"Time to compute: {runtime}")
 
-    return ci, median, prob_ratios
+    return prob_ratio_ci, theta_hat_b
