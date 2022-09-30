@@ -189,35 +189,84 @@ def compute_cube_regression(cube, predictor, broadcast_coef=True):
     """
     # Make sure data is not lazy
     data = cube.data
-    # Shape
-    lat_shape = cube.coord("grid_latitude").shape[0]
-    lon_shape = cube.coord("grid_longitude").shape[0]
-    # Store the results
-    coefs = np.zeros((lat_shape, lon_shape))
-    pvalues = np.zeros((lat_shape, lon_shape))
-    # We use statsmodels
-    X = sm.add_constant(predictor)
-    # Loop over all gridpoints. Mask later.
-    for lat in trange(lat_shape):
-        for lon in range(lon_shape):
+    # If cube is 1d, we assume that is only a timeseries.
+    if len(data.shape) == 1:
+        # We use statsmodels
+        X = sm.add_constant(predictor)
+        # Compute the regression.
+        res = sm.OLS(data, X).fit()
+        coefs = res.params[-1]
+        pvalues = res.pvalues[-1]
+
+        # This returns the compressed and broadcasted array.
+        if broadcast_coef:
+            coefs = np.asarray([coefs]).reshape(1, 1)
+            # Broadcast so that there is one coef for each year.
+            coefs = np.repeat(coefs, predictor.shape[0])
+            return coefs
+        else:
+            # If not, we return the masked arrays.
+            return coefs, pvalues
+
+    # If cube is 2d we assume it is an ensemble cube, so dims are ens_id, time
+    elif len(data.shape) == 2:
+        # If cube is 3d we assume that it is time, lat, lon.
+        # Store the results
+        coefs = np.zeros(data.shape[0])
+        pvalues = np.zeros(data.shape[0])
+        # We use statsmodels
+        X = sm.add_constant(predictor)
+        # Loop over all gridpoints. Mask later.
+        for ens in trange(data.shape[0]):
             # Get the result
-            res = sm.OLS(data[:, lat, lon], X).fit()
-            coefs[lat, lon] = res.params[-1]
-            pvalues[lat, lon] = res.pvalues[-1]
+            res = sm.OLS(data[ens, :], X).fit()
+            coefs[ens] = res.params[-1]
+            pvalues[ens] = res.pvalues[-1]
 
-    # Mask the result arrays. The cube should hold the dance.
-    coefs = np.ma.masked_array(coefs, cube.data.mask[0, :, :])
-    pvalues = np.ma.masked_array(pvalues, cube.data.mask[0, :, :])
+        # This returns the compressed and broadcasted array.
+        if broadcast_coef:
+            # Broadcast so that there is one coef for each year.
+            coefs = np.broadcast_to(
+                coefs[:, np.newaxis], (data.shape[0], predictor.shape[0])
+            )
+            return coefs
+        else:
+            # If not, we return the masked arrays.
+            return coefs, pvalues
 
-    # This returns the compressed and broadcasted array.
-    if broadcast_coef:
-        coefs = coefs.compressed()
-        # Broadcast so that there is one coef for each year.
-        coefs = np.broadcast_to(coefs, (predictor.shape[0], coefs.shape[0]))
-        return coefs
-    # If not, we return the masked arrays.
+    # If len is 3 we assume data is time, lat, lon.
+    elif len(data.shape) == 3:
+        # Shape
+        lat_shape = cube.coord("grid_latitude").shape[0]
+        lon_shape = cube.coord("grid_longitude").shape[0]
+        # Store the results
+        coefs = np.zeros((lat_shape, lon_shape))
+        pvalues = np.zeros((lat_shape, lon_shape))
+        # We use statsmodels
+        X = sm.add_constant(predictor)
+        # Loop over all gridpoints. Mask later.
+        for lat in trange(lat_shape):
+            for lon in range(lon_shape):
+                # Get the result
+                res = sm.OLS(data[:, lat, lon], X).fit()
+                coefs[lat, lon] = res.params[-1]
+                pvalues[lat, lon] = res.pvalues[-1]
+
+        # Mask the result arrays. The cube should hold the dance.
+        coefs = np.ma.masked_array(coefs, cube.data.mask[0, :, :])
+        pvalues = np.ma.masked_array(pvalues, cube.data.mask[0, :, :])
+
+        # This returns the compressed and broadcasted array.
+        if broadcast_coef:
+            coefs = coefs.compressed()
+            # Broadcast so that there is one coef for each year.
+            coefs = np.broadcast_to(coefs, (predictor.shape[0], coefs.shape[0]))
+            return coefs
+        else:
+            # If not, we return the masked arrays.
+            return coefs, pvalues
     else:
-        return coefs, pvalues
+        raise ValueError("Cube shape not understood.")
 
 
 def get_gmst(cube, path=None, window=4):
