@@ -3,6 +3,8 @@ import iris
 import numpy as np
 from tqdm.autonotebook import trange
 
+from attribution.validation import select_distribution
+
 
 def calc_prob_ratio(
     data,
@@ -68,12 +70,12 @@ def calc_prob_ratio(
     # Should the distribution be scaled or shifted?
     if scale_dist:
         # Scale the distribution to create the counterfactual climate.
-        adjusted_fit = scale_dist_params(temperature, *fit, regr_slope)
+        adjusted_fit = scale_dist_params(temperature, fit, regr_slope=regr_slope)
     else:
         # Shift the distribution.
-        adjusted_fit = shift_dist_params(temperature, *fit, regr_slope)
+        adjusted_fit = shift_dist_params(temperature, fit, regr_slope=regr_slope)
 
-    # Calculate prob. ratio
+    # Calculate log prob. ratio
     if log_sf:
         p_func = dist.logsf
         # Calculate the probability under the current climate.
@@ -81,7 +83,7 @@ def calc_prob_ratio(
         # Calculate the probability unde the counterfactual climate.
         p0 = p_func(threshold, *adjusted_fit)
         # The ratio is inverted for log_sf.
-        prob_ratio = p0 / p1
+        prob_ratio = p1 - p0
     else:
         # Survival function.
         p_func = dist.sf
@@ -94,7 +96,7 @@ def calc_prob_ratio(
     return prob_ratio
 
 
-def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
+def scale_dist_params(temperature, fit, regr_slope):
     """Scale the distribution by the location and scale parameters.
     Could add sources here.
 
@@ -102,12 +104,8 @@ def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     ---------
     temperature : float
         Temperature anomaly to scale the distribution to.
-    shape0 : float
-        Shape parameter. Unaffected.
-    loc0 : float
-        Location parameter of the distribution.
-    scale0 : float
-        Scale parameter of the distribution
+    fit : tuple
+        Tuple holding the distribution parameters.
     regr_slope : float
         Regression slope between GMST and data of the distribution.
 
@@ -118,17 +116,41 @@ def scale_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     scale : float
     """
 
-    # Calculate the new location
-    loc = loc0 * np.exp(regr_slope * temperature / loc0)
-    # And scale
-    scale = scale0 * np.exp(regr_slope * temperature / loc0)
+    if len(fit) == 4:
+        # Unpack
+        a, c, loc0, scale0 = fit
+        # Calculate the new location
+        loc = loc0 * np.exp(regr_slope * temperature / loc0)
+        # And scale
+        scale = scale0 * np.exp(regr_slope * temperature / loc0)
 
-    # We return the shape unchanged, this makes it convenient to
-    # pass the results to a dist.
-    return shape0, loc, scale
+        return a, c, loc, scale
+    elif len(fit) == 3:
+        # Unpack
+        shape0, loc0, scale0 = fit
+        # Calculate the new location
+        loc = loc0 * np.exp(regr_slope * temperature / loc0)
+        # And scale
+        scale = scale0 * np.exp(regr_slope * temperature / loc0)
+
+        return shape0, loc, scale
+    elif len(fit) == 2:
+        loc0, scale0 = fit
+        # Calculate the new location
+        loc = loc0 * np.exp(regr_slope * temperature / loc0)
+        # And scale
+        scale = scale0 * np.exp(regr_slope * temperature / loc0)
+
+        return loc, scale
+    else:
+        # Scaling is probably to vaible for one parameter distributions
+        loc0 = fit
+        # Calculate the new location
+        loc = loc0 * np.exp(regr_slope * temperature / loc0)
+        return loc
 
 
-def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
+def shift_dist_params(temperature, fit, regr_slope):
     """Shift the distribution by the location and scale parameters.
     Could add sources here.
 
@@ -136,12 +158,8 @@ def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     ---------
     temperature : float
         Temperature anomaly to scale the distribution to.
-    shape0 : float
-        Shape parameter. Unaffected.
-    loc0 : float
-        Location parameter of the distribution.
-    scale0 : float
-        Scale parameter of the distribution
+    fit : tuple
+        Tuple holding the distribution parameters.
     regr_slope : float
         Regression slope between GMST and data of the distribution.
 
@@ -151,11 +169,24 @@ def shift_dist_params(temperature, shape0, loc0, scale0, regr_slope):
     loc : float
     scale : float
     """
-
-    # Only the location is shifted.
-    loc = loc0 + regr_slope * temperature
-
-    return shape0, loc, scale0
+    shift = regr_slope * temperature
+    if len(fit) == 4:
+        a, c, loc0, scale0 = fit
+        loc = loc0 + shift
+        return a, c, loc, scale0
+    elif len(fit) == 3:
+        shape0, loc0, scale0 = fit
+        loc = loc0 + shift
+        return shape0, loc, scale0
+    elif len(fit) == 2:
+        loc0, scale0 = fit
+        loc = loc0 + shift
+        return loc, scale0
+    else:
+        print(fit)
+        loc0 = fit
+        loc = loc0 + shift
+        return loc
 
 
 def calc_prob_ratio_ds(
