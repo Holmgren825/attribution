@@ -175,8 +175,8 @@ def compute_cube_regression(cube, predictor, broadcast_coef=True):
 
     Arguments
     ---------
-    cube : iris.cube.Cube
-        Cube containing the data on which to perform the regression.
+    cube : iris.cube.Cube or numpy.ndarray
+        Cube containing the data on which to perform the regression, or the cube data.
     predictor : array_like
         Data to use a predictor in the linear regression.
     broadcast_coef : bool, default: True
@@ -188,7 +188,11 @@ def compute_cube_regression(cube, predictor, broadcast_coef=True):
     The regression coefficient.
     """
     # Make sure data is not lazy
-    data = cube.data
+    # Did we get a cube?
+    if isinstance(cube, iris.cube.Cube):
+        data = cube.data
+    else:
+        data = cube
     # If cube is 1d, we assume that is only a timeseries.
     if len(data.shape) == 1:
         # We use statsmodels
