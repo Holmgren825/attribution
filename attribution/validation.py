@@ -395,7 +395,7 @@ def inspect_distributions(
         ks_results[key] = res
         if plot:
             # Need some x values to plot along.
-            x = np.linspace(0, data.max(), 200)
+            x = np.linspace(data.min(), data.max(), 200)
             # Plot cdf or pdf.
             if cdf:
                 func = dist.cdf
