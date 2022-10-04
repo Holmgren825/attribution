@@ -197,11 +197,12 @@ def prob_ratio_ci(
 def prob_ratio_ds_ci(
     cube,
     index,
-    dists,
+    dist,
     threshold_quantile,
     client,
     n_days=20,
     n_years=3,
+    ensemble=False,
     predictor=None,
     n_hemisphere=True,
     delta_temp=-1.0,
@@ -226,7 +227,7 @@ def prob_ratio_ds_ci(
     index : climix.index.Index
         Prepared climix index. The probability ratio is based on the index series
         computed based on the cube.
-    dists : dict
+    dist : scipy.stats.rv_continous
         Dictionary holding scipy.stats.rv_contionous distributions. These are evaluated
         and used to represent the data.
     threshold_quantile : float
@@ -237,6 +238,8 @@ def prob_ratio_ds_ci(
         Number of days in the resampling window.
     n_years : int
         Number of years in the resampling window.
+    ensemble : bool, default: True
+        Is the provided data an ensemble.
     predicor : numpy.ndarray
         Predictor used for the regression.
     n_hemisphere : bool, defaul: True
@@ -272,12 +275,20 @@ def prob_ratio_ds_ci(
     t0 = time.time()
     # Get the data from the cube.
     data = cube.data
-    # Get the daily window.
-    windows, first_idx, last_idx = daily_resampling_windows(data, n_days, n_years)
-    # Sample each daily window randomly, n_resamples times.
-    resampled_windows = rng.choice(windows, axis=1, size=n_resamples).T
-    # Select the resampled data.
-    resampled_data = data[resampled_windows]
+    # Is data an ensemble?
+    if not ensemble:
+        # Get the daily window.
+        windows, first_idx, last_idx = daily_resampling_windows(data, n_days, n_years)
+        # Sample each daily window randomly, n_resamples times.
+        resampled_windows = rng.choice(windows, axis=1, size=n_resamples).T
+        # Select the resampled data.
+        resampled_data = data[resampled_windows]
+    else:
+        first_idx = None
+        last_idx = None
+        resampled_data = data
+        n_resamples = data.shape[0]
+        cube = cube[0, :].copy()
 
     # Get the predictor if none is given.
     if predictor is None:
@@ -333,7 +344,7 @@ def prob_ratio_ds_ci(
         calc_prob_ratio_ds,
         index_cubes,
         shifted_index_cubes,
-        dists=dists,
+        dist=dist,
         threshold_quantile=threshold_quantile,
         log_sf=log_sf,
     )

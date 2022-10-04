@@ -3,8 +3,6 @@ import iris
 import numpy as np
 from tqdm.autonotebook import trange
 
-from attribution.validation import select_distribution
-
 
 def calc_prob_ratio(
     data,
@@ -16,7 +14,6 @@ def calc_prob_ratio(
     log_sf=False,
     random_slope=False,
     rng=None,
-    axis=None,
 ):
     """Calculate the probability ratio for an event of magnitude (threshold) under the
     current climate (data) and a counterfactual climate (shifted/scaled) according to the
@@ -190,7 +187,7 @@ def shift_dist_params(temperature, fit, regr_slope):
 
 
 def calc_prob_ratio_ds(
-    current_cube, counter_cube, dists, threshold_quantile, log_sf=True
+    current_cube, counter_cube, dist, threshold_quantile, log_sf=True
 ):
     """Calculate the probability ratio of an event based on two cubes.
 
@@ -200,8 +197,8 @@ def calc_prob_ratio_ds(
         Iris cube with a climate index timeseries. Assumes that this is the current climate.
     counter_cube : iris.cube.Cube
         Iris cube with a climate index timeseries. Assumes that this is holds the counterfactual climate.
-    dists : dict
-        The distributions (scipy.stats.rv_contious) evaluated and used to parametrized the data in the cubes.
+    dist : scipy.stats.rv_contious
+        The distribution (scipy.stats.rv_contious) used to parametrized the data in the cubes.
     threshold_quantile : float
         Quantile event threshold.
     log_sf : bool, default: True
@@ -211,9 +208,6 @@ def calc_prob_ratio_ds(
     -------
     prob_ratio : float
     """
-
-    #  Which distribution should be used?
-    dist = select_distribution(current_cube.data, dists)
 
     # Fit the data
     fit1 = dist.fit(current_cube.data)
