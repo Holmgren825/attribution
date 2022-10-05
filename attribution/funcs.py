@@ -261,9 +261,9 @@ def shift_cube_data(cube, betas, delta_temp, tqdm=False):
         new_vals = current_data + beta * delta_temp
 
         # Then we need to find where in the non-subsetted cube the new values resides.
-        indices = np.searchsorted(
-            shifted_cube.coord("time").points, subcube.coord("time").points
-        )
+        indices = np.nonzero(
+            shifted_cube.coord("time").points[:, None] == subcube.coord("time").points
+        )[0]
         # We then use these indices to overwrite the daily values with the shifted ones.
         shifted_cube.data[indices] = new_vals
 
