@@ -530,9 +530,13 @@ def prepare_era5_cube(
     # Mask.
     cube = iris.util.mask_cube(cube, mask)
 
-    # Select roi
-    if not roi_points:
+    # Any roi points?
+    if roi_points is None:
         roi_points = list(CFG["roi_mask"].values())
+
+    # If False we don't extract.
+    if roi_points:
+        cube = region_selection(cube, roi_points)
 
     cube = region_selection(cube, roi_points)
 
