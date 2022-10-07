@@ -6,14 +6,12 @@ from tqdm.autonotebook import trange
 
 def calc_prob_ratio(
     data,
-    regr_slopes,
+    reg_coef,
     threshold,
     temperature,
     dist,
     scale_dist=True,
     log_sf=False,
-    random_slope=False,
-    rng=None,
 ):
     """Calculate the probability ratio for an event of magnitude (threshold) under the
     current climate (data) and a counterfactual climate (shifted/scaled) according to the
@@ -35,12 +33,6 @@ def calc_prob_ratio(
         Whether to scale or shift the distribution. Default: True.
     log_sf : bool, default: False
         Compute the log of the survival function.
-    random_slope : bool, default: False
-        Select a random slope from regr_slopes for scaling/shifting the distribution.
-    rng : np.random.default_rng, optional
-        Random number generator.
-    axis : int, optional
-        Needed for bootstrap?
 
     Returns
     -------
@@ -53,24 +45,13 @@ def calc_prob_ratio(
     # Fit a distribution
     fit = dist.fit(data)
 
-    # Select a regression slope randomly - adds the variation of the
-    # varying regression to GMST.
-    # If not we pick the median.
-    if not random_slope:
-        regr_slope = np.median(regr_slopes)
-    else:
-        # Do we have an rng?
-        if not rng:
-            rng = np.random.default_rng()
-        # Select a random slope.
-        regr_slope = rng.choice(regr_slopes)
     # Should the distribution be scaled or shifted?
     if scale_dist:
         # Scale the distribution to create the counterfactual climate.
-        adjusted_fit = scale_dist_params(temperature, fit, regr_slope=regr_slope)
+        adjusted_fit = scale_dist_params(temperature, fit, regr_slope=reg_coef)
     else:
         # Shift the distribution.
-        adjusted_fit = shift_dist_params(temperature, fit, regr_slope=regr_slope)
+        adjusted_fit = shift_dist_params(temperature, fit, regr_slope=reg_coef)
 
     # Calculate log prob. ratio
     if log_sf:

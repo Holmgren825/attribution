@@ -4,14 +4,18 @@ from functools import partial
 from multiprocessing import Pool
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 from tqdm.autonotebook import tqdm
 
 from attribution.funcs import calc_prob_ratio, calc_prob_ratio_ds
 from attribution.utils import (
+    compute_cube_regression,
     compute_index,
     daily_resampling_windows,
+    get_gmst,
     get_monthly_gmst,
     prepare_resampled_cubes,
+    random_ts_from_windows,
 )
 from attribution.validation import select_distribution
 
@@ -40,11 +44,11 @@ mpp.Pool.istarmap = istarmap
 
 def _boot_helper(
     data,
-    regr_slopes,
+    predictor,
     threshold_quantile,
     delta_temp,
+    p_lim,
     dists,
-    random_slope=False,
     log_sf=True,
     scale_dist=False,
 ):
@@ -54,13 +58,18 @@ def _boot_helper(
     fit = dist.fit(data)
     # Get the threshold through the inverse survival funciton.
     threshold = dist.isf(threshold_quantile, *fit)
+    # Calculate regression slope and the significance of the regression.
+    reg_coef, p_value = compute_cube_regression(data, predictor, broadcast_coef=False)
+
+    # If the p-values is above the threshold, we set the reg_coef to 0.
+    if p_value > p_lim:
+        reg_coef = 0
     # Calculate the ratio.
     prob_ratio = calc_prob_ratio(
         data=data,
-        regr_slopes=regr_slopes,
+        reg_coef=reg_coef,
         threshold=threshold,
         temperature=delta_temp,
-        random_slope=random_slope,
         log_sf=log_sf,
         # This is important for temperature.
         scale_dist=scale_dist,
@@ -70,47 +79,48 @@ def _boot_helper(
 
 
 def prob_ratio_ci(
-    data,
-    reg_coefs,
+    cube,
     threshold_quantile,
     delta_temp,
     dists,
+    predictor=None,
     ensemble=False,
+    window_size=5,
     alpha=0.05,
+    p_lim=0.05,
     n_resamples=1000,
     log_sf=True,
-    random_slope=False,
     scale_dist=False,
     client=None,
 ):
-    """Bootstrapping the confidence interval of statistic.
-    Essentially a copy of the internals of scipy.stats._bootstrap, but with some added paralellisation.
+    """Bootstrapping the confidence interval of the probability ratio. Resamples the timeseries by for each year in the series
+    randomly selecting a new year from a sliding window n_resamples times. It then distributes the work of selecting a suitable
+    distribution to represent the data, calculating the regression between the series and the predictor and
+    calculating the probability ratio based on the "True" and shifted distribution.
 
     Arguments
     ---------
-    data : ndarray
-        Data on which to calculate probability ratio.
-    reg_coefs : ndarray
-        Regression coefficients for the dataset. If data is a single timeseries,
-        reg_coefs should be broadcasted so that there is one value per year.
+    cube : iris.cube.Cube
+        Cube holding the data on which to calculate the probability ratio.
     threshold_quantile : float
         The quantile representation of the event in observations.
+    delta_temp : float
+        Temperature used in shifting/scaling the distribution.
     dists : dict
         Dictionary of scipy.stats.rv_continous which are evaluated against the resampled datasets.
     ensemble : bool, default: True
         Is the provided data an ensemble.
-    alpha : float
-        Confidence level.
+    alpha : float, default: 0.05
+        Confidence level of the probability ratio.
+    p_lim : float, default: 0.05
+        P-value at which to set the regression coefficient between the
+        predictor and the cube data to 0.
     n_resamples : int, defaul: 1000
         How many times should the data be resampled.
     log_sf : bool, default: True
          Did we compute the log sf?
-    random_slope : bool, default: False
-        Passed on to calc_prob_ratio.
     scale_dist : bool, default: False
         Passed to calc_prob_ratio.
-    batch : int, optional
-        Number of resamples to process in each call. Set to 1 if Statistic is not vectorized.
     client : dask.distributed.Client
         Use a dask client to map the tasks. Default: None
 
@@ -126,24 +136,31 @@ def prob_ratio_ci(
     t0 = time.time()
     # Random number generator.
     rng = np.random.default_rng()
+    # Get the data.
+    data = cube.data
+    # Do we have a predictor?
+    if predictor is None:
+        predictor = get_gmst(cube)
     # We know how many results we need.
     if not ensemble:
         # Generate all the resamples before the loop.
-        # Generate integers in the range 0 to number of samples.
-        # And we want to fill an array with shape n_resamples x length of data.
-        # This is basically sampling with replacement.
-        resample_indices = rng.integers(0, data.shape[0], (n_resamples, data.shape[0]))
-        # Then we pick these indices from data and slopes
-        data = data[..., resample_indices]
-        reg_coefs = reg_coefs[..., resample_indices]
+        # This is essentially an random resample with replacement,
+        # but kind of maintains the trend. We can only resample
+        # each year from within a window.
+        data_windows = sliding_window_view(data, window_size)
+        # Select random data from the windows.
+        data = random_ts_from_windows(data_windows, rng, n_resamples=n_resamples)
+        # We have to shorten the predictor.
+        predictor = predictor[: data_windows.shape[0]]
 
     # Initiate a partial _boot_helper.
     boot_helper_p = partial(
         _boot_helper,
+        predictor=predictor,
         threshold_quantile=threshold_quantile,
         delta_temp=delta_temp,
+        p_lim=p_lim,
         dists=dists,
-        random_slope=random_slope,
         log_sf=log_sf,
         scale_dist=scale_dist,
     )
@@ -151,11 +168,7 @@ def prob_ratio_ci(
     if client:
         print("Submitting resampling tasks to client")
         # Map tasks to the client.
-        theta_hat_b = client.map(
-            boot_helper_p,
-            data,
-            reg_coefs,
-        )
+        theta_hat_b = client.map(boot_helper_p, data)
         # Gather the results
         theta_hat_b = client.gather(theta_hat_b)
     # If we don't have a client.
@@ -166,10 +179,7 @@ def prob_ratio_ci(
         with Pool() as p:
             theta_hat_b = list(
                 tqdm(
-                    p.istarmap(
-                        boot_helper_p,
-                        zip(data, reg_coefs),
-                    ),
+                    p.imap(boot_helper_p, data),
                     total=n_resamples,
                 )
             )

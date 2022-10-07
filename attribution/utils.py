@@ -572,6 +572,40 @@ def daily_resampling_windows(array, n_days, n_years):
     return windows[first_idx:last_idx], first_idx, last_idx
 
 
+def random_ts_from_windows(window_views, rng, n_resamples=1000):
+    """Create a random timeseries from the sliding window view of a timeseries.
+
+    Arguments
+    ---------
+    window_views : numpy.ndarray
+        A sliding window view of the data.
+    rng : numpy.random.default_rng()
+        A random number generator.
+    n_resamples : int, default: 1000
+        How many random realisations to create.
+
+    Returns
+    -------
+    random_ts : np.ndarray
+    """
+    # How many years does the sliding window series hold?
+    n_years = window_views.shape[0]
+    # Size of the window, - 1 since arrays are 0 indexed.
+    window_size = window_views.shape[1] - 1
+    # Somewhere to store the data
+    random_ts = np.zeros((n_resamples, n_years))
+    # Now we do a loop to select the random columns for each row.
+    for i in range(n_resamples):
+        # Generate the random columns for this realisation.
+        rand_cols = rng.integers(0, window_size, n_years)
+        # Select data.
+        random_ts[i, :] = np.take_along_axis(
+            window_views, rand_cols[..., np.newaxis], axis=1
+        ).flatten()
+
+    return random_ts
+
+
 def prepare_resampled_cubes(
     resampled_data,
     orig_cube,
