@@ -159,9 +159,25 @@ def load_gridclim(gridclim_path=None, variable=None, partial_dates=None):
     return gc_cube
 
 
+def get_filename(cube, ds_name, variable, CFG):
+    basename = CFG["filenames"][ds_name]
+    project_name = CFG["project_name"]
+    # Get the timestamp
+    t0 = cube.coord("time").cell(0).point.strftime("%Y%m%d")
+    t1 = cube.coord("time").cell(-1).point.strftime("%Y%m%d")
+    timestamp = t0 + "-" + t1
+
+    # Join the parts
+    filename = "_".join([variable, project_name, basename, timestamp])
+    # Add format
+    filename += ".nc"
+
+    return filename
+
+
 def prepare_gridclim_cube(
-    gridclim_path=None,
-    gridclim_filename=None,
+    path=None,
+    filename=None,
     variable=None,
     project_path=None,
     shapefile=None,
@@ -174,10 +190,10 @@ def prepare_gridclim_cube(
 
     Arguments
     ---------
-    gridclim_base_path : string, optional
+    path : string, optional
         Path to a directory containing files for the cordex ensemble members.
         Parsed from config.yml by default.
-    gridclim_filename : string, optional
+    filename : string, optional
         Filename which to save the selected dataset to.
         Parsed from config.yml by default.
     variable : string, optional
@@ -215,17 +231,17 @@ def prepare_gridclim_cube(
 
     print("Loading GridClim")
     # Path to gridclim?
-    if not gridclim_path:
-        gridclim_path = CFG["paths"]["data"]["gridclim"]
+    if not path:
+        path = CFG["paths"]["data"]["gridclim"]
     # Join the path and variable.
-    gridclim_path = os.path.join(gridclim_path, variable)
+    path = os.path.join(path, variable)
 
     # Do we have partial dates.
     if partial_dates is None:
         partial_dates = CFG["partial_dates"]
 
     # Load the GridClim cube.
-    gc_cube = load_gridclim(gridclim_path, partial_dates=partial_dates)
+    cube = load_gridclim(path, partial_dates=partial_dates)
 
     # Any roi_poins?
     if roi_points is None:
@@ -233,48 +249,37 @@ def prepare_gridclim_cube(
     # If we have roi points by now, extract them.
     # If False, no selection is done.
     if roi_points:
-        gc_cube = region_selection(gc_cube, roi_points)
+        cube = region_selection(cube, roi_points)
 
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
     mask = iris_utils.utils.mask_from_shape(
-        gc_cube,
+        cube,
         swe_mainland,
         # Relies on CF convention.
         coord_names=("grid_latitude", "grid_longitude"),
     )
 
-    gc_cube = iris.util.mask_cube(gc_cube, mask)
+    cube = iris.util.mask_cube(cube, mask)
 
     print("Saving cube")
     # Where to store the file
     if not project_path:
         project_path = CFG["paths"]["project_folder"]
     # The filename is made up of multiple components of CFG.
-    if not gridclim_filename:
-        basename = CFG["filenames"]["gridclim"]
-        project_name = CFG["project_name"]
-        # Get the timestamp
-        t0 = gc_cube.coord("time").cell(0).point.strftime("%Y%m%d")
-        t1 = gc_cube.coord("time").cell(-1).point.strftime("%Y%m%d")
-        timestamp = t0 + "-" + t1
-
-        # Join the parts
-        gridclim_filename = "_".join([variable, project_name, basename, timestamp])
-        # Add format
-        gridclim_filename += ".nc"
-
+    if not filename:
+        filename = get_filename(cube, "gridclim", variable, CFG)
     # Saving the prepared cubes.
     with dask.config.set(scheduler="synchronous"):
-        iris.save(gc_cube, os.path.join(project_path, gridclim_filename))
+        iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
     if return_cube:
-        return gc_cube
+        return cube
 
 
 def prepare_eobs_cube(
-    eobs_base_path=None,
-    eobs_filename=None,
+    path=None,
+    filename=None,
     variable=None,
     project_path=None,
     shapefile=None,
@@ -288,11 +293,11 @@ def prepare_eobs_cube(
 
     Arguments
     ---------
-    eobs_base_path : string, optional
+    path : string, optional
         Path to a directory containing files for the eobs product.
         Parsed from config.yml by default.
-    eobs_filename : string, optional
-        Filename which to save the selected dataset to.
+    filename : string, optional
+        Filename which to save the processed dataset as.
         Parsed from config.yml by default.
     variable : string, optional
         CF standard name of the variable.
@@ -346,18 +351,18 @@ def prepare_eobs_cube(
 
     # Load in the CORDEX ensemble.
     print("Loading EOBS")
-    if not eobs_base_path:
-        eobs_base_path = CFG["paths"]["data"]["eobs"]
+    if not path:
+        path = CFG["paths"]["data"]["eobs"]
     # Full path
     # eobs_base_path = os.path.join(eobs_base_path )
     # All Cordex files.
-    files = glob.glob(eobs_base_path + f"/{variable}*.nc")
+    files = glob.glob(path + f"/{variable}*.nc")
 
-    eobs_cube = iris.load(files)
+    cube = iris.load(files)
 
     # Remove attributes.
-    _ = iris.util.equalise_attributes(eobs_cube)
-    eobs_cube = eobs_cube.concatenate_cube()
+    _ = iris.util.equalise_attributes(cube)
+    cube = cube.concatenate_cube()
 
     # We extract the data over the GridClim region. No need for all of Europe.
     ref_lats = gc_cube.coord("grid_latitude").points
@@ -367,24 +372,24 @@ def prepare_eobs_cube(
         grid_longitude=lambda v: ref_lons.min() <= v <= ref_lons.max(),
     )
     print("Extracting domain")
-    eobs_cube = eobs_cube.extract(constraint)
+    cube = cube.extract(constraint)
 
     if partial_dates:
         print("Extracting timespan")
-        eobs_cube = extract_partial_date(
-            eobs_cube, date0=partial_dates["low"], date1=partial_dates["high"]
+        cube = extract_partial_date(
+            cube, date0=partial_dates["low"], date1=partial_dates["high"]
         )
 
     # Mask Sweden
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
     mask = iris_utils.utils.mask_from_shape(
-        eobs_cube,
+        cube,
         swe_mainland,
         coord_names=("grid_latitude", "grid_longitude"),
     )
 
-    eobs_cube = iris.util.mask_cube(eobs_cube, mask)
+    cube = iris.util.mask_cube(cube, mask)
 
     # Any roi points?
     if roi_points is None:
@@ -392,35 +397,26 @@ def prepare_eobs_cube(
 
     # If False we don't extract.
     if roi_points:
-        eobs_cube = region_selection(eobs_cube, roi_points)
+        cube = region_selection(cube, roi_points)
 
     print("Saving cube")
     # Where to store the file
     if not project_path:
         project_path = CFG["paths"]["project_folder"]
     # The filename is made up of multiple components of CFG.
-    if not eobs_filename:
-        basename = CFG["filenames"]["eobs"]
-        project_name = CFG["project_name"]
-        # Get the timestamp
-        t0 = eobs_cube.coord("time").cell(0).point.strftime("%Y%m%d")
-        t1 = eobs_cube.coord("time").cell(-1).point.strftime("%Y%m%d")
-        timestamp = t0 + "-" + t1
-
-        # Join the parts
-        filename = "_".join([variable, project_name, basename, timestamp])
-        filename += ".nc"
+    if not filename:
+        filename = get_filename(cube, "eobs", variable, CFG)
     # Saving the prepared cubes.
     with dask.config.set(scheduler="synchronous"):
-        iris.save(eobs_cube, os.path.join(project_path, filename))
+        iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
-        return eobs_cube
+        return cube
 
 
 def prepare_era5_cube(
-    base_path=None,
+    path=None,
     filename=None,
     variable=None,
     project_path=None,
@@ -435,7 +431,7 @@ def prepare_era5_cube(
 
     Arguments:
     ----------
-    base_path : string, optional
+    path : string, optional
         Path to a directory containing files for the era5 product.
         Parsed from config.yml by default.
     filename : string, optional
@@ -493,10 +489,10 @@ def prepare_era5_cube(
 
     # Load in the ERA5.
     print("Loading ERA5")
-    if not base_path:
-        base_path = CFG["paths"]["data"]["era5"]
+    if not path:
+        path = CFG["paths"]["data"]["era5"]
     # All ERA5 files.
-    files = glob.glob(base_path + f"/{variable}*.nc")
+    files = glob.glob(path + f"/{variable}*.nc")
 
     cube = iris.load(files)
 
@@ -546,16 +542,7 @@ def prepare_era5_cube(
         project_path = CFG["paths"]["project_folder"]
     # The filename is made up of multiple components of CFG.
     if not filename:
-        basename = CFG["filenames"]["era5"]
-        project_name = CFG["project_name"]
-        # Get the timestamp
-        t0 = cube.coord("time").cell(0).point.strftime("%Y%m%d")
-        t1 = cube.coord("time").cell(-1).point.strftime("%Y%m%d")
-        timestamp = t0 + "-" + t1
-
-        # Join the parts
-        filename = "_".join([variable, project_name, basename, timestamp])
-        filename += ".nc"
+        filename = get_filename(cube, "era5", variable, CFG)
     # Saving the prepared cubes.
     with dask.config.set(scheduler="synchronous"):
         iris.save(cube, os.path.join(project_path, filename))
@@ -566,8 +553,8 @@ def prepare_era5_cube(
 
 
 def prepare_cordex_cube(
-    cordex_base_path=None,
-    cordex_filename=None,
+    path=None,
+    filename=None,
     variable=None,
     project_path=None,
     shapefile=None,
@@ -581,10 +568,10 @@ def prepare_cordex_cube(
 
     Arguments
     ---------
-    cordex_base_path : string, optional
+    path : string, optional
         Path to a directory containing files for the cordex ensemble members.
         Parsed from config.yml by default.
-    cordex_filename : string
+    filename : string
         Filename which to save the selected dataset to.
         Parsed from config.yml by default.
     variable : string, optional
@@ -640,17 +627,17 @@ def prepare_cordex_cube(
 
     # Load in the CORDEX ensemble.
     print("Loading the CORDEX ensemble")
-    if not cordex_base_path:
-        cordex_base_path = CFG["paths"]["data"]["cordex"]
+    if not path:
+        path = CFG["paths"]["data"]["cordex"]
     # Full path
-    cordex_base_path = os.path.join(cordex_base_path, variable)
+    path = os.path.join(path, variable)
     # All Cordex files.
-    files = glob.glob(cordex_base_path + "/*_rcp85*.nc")
+    files = glob.glob(path + "/*_rcp85*.nc")
 
-    cordex_cube = iris.load(files)
+    cube = iris.load(files)
 
     # HadGem_CLM is missing 1826 days after the timspan extraction below. So we pop it out.
-    _ = cordex_cube.pop(32)
+    _ = cube.pop(32)
 
     # We use a "normal" mp-pool here.
     if partial_dates:
@@ -662,52 +649,52 @@ def prepare_cordex_cube(
         )
         # Map the extraction of each ensemble member to be done in parallell.
         with Pool() as p:
-            cordex_cube = p.map(func, cordex_cube)
+            cube = p.map(func, cube)
 
     # Create a CubeList from a list of cubes.
-    cordex_cube = iris.cube.CubeList(cordex_cube)
+    cube = iris.cube.CubeList(cube)
 
     # After this we add a new auxiliary coordinate indicating the ensemble member.
-    iris_utils.utils.attribute_to_aux(cordex_cube, new_coord_name="ensemble_id")
+    iris_utils.utils.attribute_to_aux(cube, new_coord_name="ensemble_id")
 
     # Remove attributes.
-    _ = iris.util.equalise_attributes(cordex_cube)
+    _ = iris.util.equalise_attributes(cube)
 
     # We also need to remove the height coordinate since not all members have it.
     # This is only relevant for e.g. tasmax.
-    for cube in cordex_cube:
+    for cube_p in cube:
         try:
-            cube.remove_coord("height")
+            cube_p.remove_coord("height")
         except CoordinateNotFoundError:
             pass
     # Now we should be able to merge the cubes along the new coordinate.
-    cordex_cube = iris_utils.merge_aeq_cubes(cordex_cube)
+    cube = iris_utils.merge_aeq_cubes(cube)
     # Fix time coordinate
     # By now we should have all the correct data in the cube,
     # So we can simply replace the time coordinate to make sure they match,
-    cordex_cube.remove_coord("time")
-    cordex_cube.add_dim_coord(gc_cube.coord("time"), 1)
+    cube.remove_coord("time")
+    cube.add_dim_coord(gc_cube.coord("time"), 1)
 
     # Mask Sweden
     # Create a mask.
     # mask from shape cant handle the 4d cube so we have to do this manually for now.
     mask = iris_utils.utils.mask_from_shape(
-        cordex_cube[0, :, :, :],
+        cube[0, :, :, :],
         swe_mainland,
         coord_names=("grid_latitude", "grid_longitude"),
     )
 
     # Broadcast along the fourth dimension (ensemble_id).
-    mask = np.broadcast_to(mask, cordex_cube.shape)
+    mask = np.broadcast_to(mask, cube.shape)
 
     # Mask the cube.
-    cordex_cube = iris.util.mask_cube(cordex_cube, mask)
+    cube = iris.util.mask_cube(cube, mask)
 
     # Check if grid points are almost equal
     lats = np.all(
         np.isclose(
             gc_cube.coord("grid_latitude").points,
-            cordex_cube.coord("grid_latitude").points,
+            cube.coord("grid_latitude").points,
         )
     )
 
@@ -715,7 +702,7 @@ def prepare_cordex_cube(
     longs = np.all(
         np.isclose(
             gc_cube.coord("grid_longitude").points,
-            cordex_cube.coord("grid_longitude").points,
+            cube.coord("grid_longitude").points,
         )
     )
 
@@ -724,9 +711,9 @@ def prepare_cordex_cube(
         coords = ["grid_latitude", "grid_longitude", "latitude", "longitude"]
         # Loop over the coordinates and copy over points and bounds.
         for coord in coords:
-            cordex_cube.coord(coord).points = deepcopy(gc_cube.coord(coord).points)
+            cube.coord(coord).points = deepcopy(gc_cube.coord(coord).points)
             # Bounds
-            cordex_cube.coord(coord).bounds = deepcopy(gc_cube.coord(coord).bounds)
+            cube.coord(coord).bounds = deepcopy(gc_cube.coord(coord).bounds)
 
     else:
         raise ValueError(
@@ -739,31 +726,22 @@ def prepare_cordex_cube(
 
     if roi_points:
         # Select the region.
-        cordex_cube = region_selection(cordex_cube, roi_points)
+        cube = region_selection(cube, roi_points)
 
     print("Saving cube")
     # Where to store the file
     if not project_path:
         project_path = CFG["paths"]["project_folder"]
     # The filename is made up of multiple components of CFG.
-    if not cordex_filename:
-        basename = CFG["filenames"]["cordex"]
-        project_name = CFG["project_name"]
-        # Get the timestamp
-        t0 = cordex_cube.coord("time").cell(0).point.strftime("%Y%m%d")
-        t1 = cordex_cube.coord("time").cell(-1).point.strftime("%Y%m%d")
-        timestamp = t0 + "-" + t1
-
-        # Join the parts
-        cordex_filename = "_".join([variable, project_name, basename, timestamp])
-        cordex_filename += ".nc"
+    if not filename:
+        filename = get_filename(cube, "cordex", variable, CFG)
     # Saving the prepared cubes.
     with dask.config.set(scheduler="synchronous"):
-        iris.save(cordex_cube, os.path.join(project_path, cordex_filename))
+        iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
-        return cordex_cube
+        return cube
 
 
 def prepare_slens(
@@ -943,17 +921,7 @@ def prepare_pthbv(
         project_path = CFG["paths"]["project_folder"]
     # The filename is made up of multiple components of CFG.
     if not filename:
-        basename = CFG["filenames"]["pthbv"]
-        project_name = CFG["project_name"]
-        # Get the timestamp
-        t0 = cube.coord("time").cell(0).point.strftime("%Y%m%d")
-        t1 = cube.coord("time").cell(-1).point.strftime("%Y%m%d")
-        timestamp = t0 + "-" + t1
-
-        # Join the parts
-        filename = "_".join([variable_cf, project_name, basename, timestamp])
-        # Add format
-        filename += ".nc"
+        filename = get_filename(cube, "pthbv", variable_cf, CFG)
     # Saving the prepared cubes.
     with dask.config.set(scheduler="synchronous"):
         iris.save(cube, os.path.join(project_path, filename))
