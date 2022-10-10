@@ -3,6 +3,7 @@
 
 import glob
 import os
+import warnings
 from copy import deepcopy
 from functools import partial
 from multiprocessing import Pool
@@ -17,6 +18,7 @@ import numpy as np
 from dask.distributed import Client
 from iris.exceptions import CoordinateNotFoundError
 from iris.time import PartialDateTime
+from tqdm.autonotebook import trange
 
 from attribution.config import init_config
 from attribution.utils import get_country_shape
@@ -744,7 +746,118 @@ def prepare_cordex_cube(
         return cube
 
 
-def prepare_slens(
+def load_slens_member(
+    realisation_idx,
+    path=None,
+    variable=None,
+    shapefile=None,
+    partial_dates=None,
+    roi_points=None,
+):
+    """Prepare an iris cube over a selected region and timespan with data
+    from a single S-Lens ensemble member.
+
+    Arguments
+    ---------
+    realisation_idx : int
+        Which realisation to load.
+    path : string, optional
+        Path to a directory containing files for the S-Lens ensemble.
+    filename : string, optional
+        Filename which to save the selected dataset to.
+    variable : string, optional
+        CF standard name of the variable.
+        Parsed from config.yml by default.
+    project_path : string, optional
+        Where to save the prepared cube.
+        Parsed from config.yml by default.
+    shapefile : string, optional
+        Path to shapefile
+        Parsed from config.yml by default.
+    partial_dates : dict, optional
+        Dictionary holding the parts of partial dates used to constrain the data.
+        E.g.
+        {
+        "low": {"year": 1985, "month", 12},
+        "high": {"year": 2012, "month": 5, "day": 20}
+        }
+        By default read from config.yml. If False no time extraction is done.
+    roi_points : array_like(4), optional
+        Points for longitude and latitude extents: [N, S, E, W] = [58, 55, 18, 11].
+        By default read from config.yml. If False no spatial extraction is done.
+    return_cube : bool, default: False
+        Whether to return the cube after saving it.
+    """
+    # Get the configuration
+    CFG = init_config()
+
+    # Get the full name of the realisation folder.
+    realisation_idx = f"r{realisation_idx}i1p1f1"
+
+    if not shapefile:
+        shapefile = CFG["paths"]["shapefile"]
+        shapefile = get_country_shape(shapefile=shapefile)
+
+    # What variable are we using?
+    if not variable:
+        variable = CFG["variable"]
+
+    if partial_dates is None:
+        partial_dates = CFG["partial_dates"]
+
+    # Path to the data.
+    if not path:
+        path = CFG["paths"]["data"]["s-lens"]
+
+    # TODO This is probably not corretct for s-lens.
+    files = glob.glob(path + f"/{realisation_idx}/day/{variable}/*/*/*.nc")
+
+    # Loading the S-Lens data throws a UserWarning
+    # "Missing CF-netCDF measure variable 'areacella', referenced by netCDF variable 'tasmax'"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        cube = iris.load(files)
+
+    # Equalise the attributes
+    _ = iris.util.equalise_attributes(cube)
+    # Concatenate the cube (along time).
+    cube = cube.concatenate_cube()
+
+    # Mask Sweden
+    # Create a mask.
+    mask = iris_utils.utils.mask_from_shape(
+        cube,
+        shapefile,
+        coord_system=False,
+        coord_names=("latitude", "longitude"),
+    )
+
+    # Broadcast along the fourth dimension (ensemble_id).
+    mask = np.broadcast_to(mask, cube.shape)
+
+    # Mask the cube.
+    cube = iris.util.mask_cube(cube, mask)
+
+    # If region of interest is None, parse it.
+    if roi_points is None:
+        roi_points = list(CFG["roi_mask"].values())
+
+    if roi_points:
+        region_constraint = iris.Constraint(
+            coord_values={
+                "latitude": lambda v: roi_points[1] < v < roi_points[0],
+                "longitude": lambda v: roi_points[3] < v < roi_points[2],
+            }
+        )
+
+        # Extract the roi
+        cube = cube.extract(region_constraint)
+
+    # Now we can return the cube.
+    return cube
+
+
+def prepare_slens_cube(
     path=None,
     filename=None,
     variable=None,
@@ -755,7 +868,7 @@ def prepare_slens(
     return_cube=False,
 ):
     """Prepare an iris cube over a selected region and timespan with data
-    from the GridClim product.
+    from the S-Lens ensemble.
 
     Arguments
     ---------
@@ -791,15 +904,75 @@ def prepare_slens(
 
     if not shapefile:
         shapefile = CFG["paths"]["shapefile"]
-    swe_mainland = get_country_shape(shapefile=shapefile)
+    shapefile = get_country_shape(shapefile=shapefile)
 
     # What variable are we using?
     if not variable:
         variable = CFG["variable"]
 
+    if partial_dates is None:
+        partial_dates = CFG["partial_dates"]
+
+    print("Loading S-Lens ensemble members")
     # Path to the data.
     if not path:
-        path = CFG["paths"]["data"]["slens"]
+        path = CFG["paths"]["data"]["s-lens"]
+
+    # If region of interest is None, parse it.
+    if roi_points is None:
+        roi_points = list(CFG["roi_mask"].values())
+    # Load every ensemble member as a single cube and merge in chunks of 10.
+    # Merging the chunk reduces the memory use quite a bit.
+    cubes_outer = []
+    for i in trange(0, 50, 10, desc="Ens. chunk"):
+        cubes_inner = []
+        for j in trange(101 + i, 111 + i, leave=False, desc="Chunk member"):
+            cubes_inner.append(
+                load_slens_member(
+                    j,
+                    path=path,
+                    variable=variable,
+                    shapefile=shapefile,
+                    roi_points=roi_points,
+                )
+            )
+
+        cube = iris.cube.CubeList(cubes_inner)
+        # Create a CubeList from a list of cubes.
+        # After this we add a new auxiliary coordinate indicating the variant of the ensemble.
+        iris_utils.utils.attribute_to_aux(
+            cube,
+            attribute_names="realization_index",
+            new_coord_name="realization_index",
+        )
+
+        # Equalise cube attributes.
+        _ = iris.util.equalise_attributes(cube)
+
+        # Merge the cubes.
+        cube = cube.merge_cube()
+        cubes_outer.append(cube)
+
+    print("Concatenating chunks")
+    cube = iris.cube.CubeList(cubes_outer)
+    cube = cube.concatenate_cube()
+
+    print("Realising cube, see progression in dask UI")
+    # Realising the cube data before saving.
+    _ = cube.data
+    print("Saving cube")
+    # Where to store the file
+    if not project_path:
+        project_path = CFG["paths"]["project_folder"]
+    # The filename is made up of multiple components of CFG.
+    if not filename:
+        filename = get_filename(cube, "s-lens", variable, CFG)
+    # Saving the prepared cubes.
+    iris.save(cube, os.path.join(project_path, filename))
+    print("Finished")
+
+    if return_cube:
+        return cube
 
 
 def prepare_pthbv(
