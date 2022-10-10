@@ -590,18 +590,14 @@ def random_ts_from_windows(window_views, rng, n_resamples=1000):
     """
     # How many years does the sliding window series hold?
     n_years = window_views.shape[0]
-    # Size of the window, - 1 since arrays are 0 indexed.
-    window_size = window_views.shape[1] - 1
-    # Somewhere to store the data
-    random_ts = np.zeros((n_resamples, n_years))
-    # Now we do a loop to select the random columns for each row.
-    for i in range(n_resamples):
-        # Generate the random columns for this realisation.
-        rand_cols = rng.integers(0, window_size, n_years)
-        # Select data.
-        random_ts[i, :] = np.take_along_axis(
-            window_views, rand_cols[..., np.newaxis], axis=1
-        ).flatten()
+    # Size of the window.
+    window_size = window_views.shape[1]
+    # Broadcast the windows to the number of resamples.
+    window_views = np.broadcast_to(window_views, (n_resamples, n_years, window_size))
+    # Sample the random column indices.
+    rand_cols = rng.integers(0, window_size - 1, (n_resamples, n_years, 1))
+    # Select data, remove axes of size 1.
+    random_ts = np.take_along_axis(window_views, rand_cols, axis=2).squeeze()
 
     return random_ts
 
