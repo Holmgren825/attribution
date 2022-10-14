@@ -14,7 +14,7 @@ from attribution.utils import (
     daily_resampling_windows,
     get_gmst,
     get_monthly_gmst,
-    prepare_resampled_cubes,
+    prepare_resampled_cube,
     random_ts_from_windows,
 )
 from attribution.validation import select_distribution
@@ -207,15 +207,15 @@ def prob_ratio_ci(
 def prob_ratio_ds_ci(
     cube,
     index,
-    dist,
+    dists,
     threshold_quantile,
-    client,
     n_days=20,
     n_years=3,
     ensemble=False,
     predictor=None,
     n_hemisphere=True,
     delta_temp=-1.0,
+    p_lim=0.05,
     quantile_shift=False,
     season=None,
     alpha=0.05,
@@ -242,8 +242,6 @@ def prob_ratio_ds_ci(
         and used to represent the data.
     threshold_quantile : float
         Quantile of the event threshold in observations.
-    client : dask.distributed.Client
-        Use a dask client to distribute some tasks.
     n_days : int
         Number of days in the resampling window.
     n_years : int
@@ -256,6 +254,8 @@ def prob_ratio_ds_ci(
         Use northern hemisphere mst data.
     delta_temp : float
         Temperature difference used to shift the cube data.
+    p_lim : float, default: 0.05
+        Significance level for regression coefficients.
     quantile_shift : bool, default: False
         Wether to quantile shift the cube data, or median shift it.
     season : string
@@ -281,23 +281,34 @@ def prob_ratio_ds_ci(
     if not rng:
         rng = np.random.default_rng()
     # When did we start?
-    print("Resampling cubes.")
+    print("Generating resampled cube")
     t0 = time.time()
     # Get the data from the cube.
     data = cube.data
     # Is data an ensemble?
     if not ensemble:
-        # Get the daily window.
+        # Get the daily windows.
         windows, first_idx, last_idx = daily_resampling_windows(data, n_days, n_years)
-        # Sample each daily window randomly, n_resamples times.
-        resampled_windows = rng.choice(windows, axis=1, size=n_resamples).T
         # Select the resampled data.
-        resampled_data = data[resampled_windows]
+        resampled_idx = random_ts_from_windows(windows, rng, n_resamples=n_resamples)
+        # It is probably good to copy the data here.
+        resampled_data = data[resampled_idx].data
+        # Broadcast the realisation so we have 3 of each.
+        resampled_data = np.broadcast_to(
+            resampled_data.reshape(n_resamples, 1, -1),
+            (n_resamples, 3, resampled_data.shape[-1]),
+        ).copy()
     else:
+        # If we have an ensemble.
         first_idx = None
         last_idx = None
-        resampled_data = data
         n_resamples = data.shape[0]
+        # We use the data as the resampled data.
+        resampled_data = data
+        resampled_data = np.broadcast_to(
+            resampled_data.reshape(n_resamples, 1, -1),
+            (n_resamples, 3, resampled_data.shape[-1]),
+        ).copy()
         cube = cube[0, :].copy()
 
     # Get the predictor if none is given.
@@ -306,78 +317,89 @@ def prob_ratio_ds_ci(
             cube[first_idx:last_idx], n_hemisphere=n_hemisphere
         )
 
-    # Create partial for preparing cubes.
-    prepare_cubes_p = partial(
-        prepare_resampled_cubes,
-        orig_cube=cube,
-        predictor=predictor,
-        first_idx=first_idx,
-        last_idx=last_idx,
+    # Genereate the resampled cube.
+    resampled_cube = prepare_resampled_cube(
+        cube,
+        resampled_data,
+        predictor,
+        first_idx,
+        last_idx,
         delta_temp=delta_temp,
+        p_lim=p_lim,
         quantile_shift=quantile_shift,
         season=season,
     )
-    # We then map the resampled data to the partial function.
-    with Pool() as p:
-        resampled_cubes = list(
-            tqdm(p.imap(prepare_cubes_p, resampled_data), total=n_resamples)
-        )
-    # We like arrays.
-    resampled_cubes = np.asarray(resampled_cubes)
+
     # Get the time.
     t1 = time.time()
     runtime = time.strftime("%H:%M:%S", time.gmtime(t1 - t0))
-    print(f"Time to compute: {runtime}")
+    print(f"Time to complete: {runtime}")
 
-    print("Computing index cubes")
+    print("Computing index cube")
     t2 = time.time()
-    # Now we can compute the index cubes.
-    # 0th column of resampled_cubes holds the current climate
-    # Current clim.
-    index_cubes = client.map(compute_index, resampled_cubes[:, 0], index=index)
-    index_cubes = client.gather(index_cubes)
-    # Shifted clim.
-    # 1st column of resampled_cubes holds the shifted climate
-    print("Computing shifted index cubes")
-    shifted_index_cubes = client.map(compute_index, resampled_cubes[:, 1], index=index)
-    shifted_index_cubes = client.gather(shifted_index_cubes)
+    # Now we can compute the index on all realisations and regression variants in one go.
+    index_cube = compute_index(resampled_cube, index=index)
 
     t3 = time.time()
     runtime = time.strftime("%H:%M:%S", time.gmtime(t3 - t2))
-    print(f"Time to compute: {runtime}")
-
-    # Now that we have all cubes, we can compute the probability ratio for each pair.
+    print(f"Time to complete: {runtime}")
+    # Compute the probability ratio for all realisations and regression combinations
+    # e.g. orig to all reg. anc orig to sig. reg.
     # We know how many results we need.
-    print("Computing prob. ratios.")
+    print("Calculating prob. ratios")
     t4 = time.time()
-    theta_hat_b = client.map(
+    # Partial function so we can distribute the realisations.
+    calc_prob_ratio_p = partial(
         calc_prob_ratio_ds,
-        index_cubes,
-        shifted_index_cubes,
-        dist=dist,
+        dists=dists,
         threshold_quantile=threshold_quantile,
         log_sf=log_sf,
     )
-    # Gather the results.
-    theta_hat_b = client.gather(theta_hat_b)
-    theta_hat_b = np.asarray(theta_hat_b)
+    # Realise the data before mapping to pool.
+    index_cube.data
+
+    # Map the calculations to the processing pool.
+    with Pool() as p:
+        theta_hat_b_all = list(
+            tqdm(
+                p.imap(calc_prob_ratio_p, index_cube.slices_over("realization_index")),
+                total=n_resamples,
+            )
+        )
+
+    # We like arrays.
+    theta_hat_b_all = np.asarray(theta_hat_b_all)
+    # prob_ratios where all regressions have been used.
+    theta_hat_b = theta_hat_b_all[:, 0]
     # Remove nans?
     theta_hat_b = theta_hat_b[~np.isnan(theta_hat_b)]
     theta_hat_b = theta_hat_b[~np.isinf(theta_hat_b)]
+    # Ratios where only significant regressions have been used.
+    theta_hat_b_sig = theta_hat_b_all[:, 1]
+    theta_hat_b_sig = theta_hat_b_sig[~np.isnan(theta_hat_b_sig)]
+    theta_hat_b_sig = theta_hat_b_sig[~np.isinf(theta_hat_b_sig)]
     t5 = time.time()
     runtime = time.strftime("%H:%M:%S", time.gmtime(t5 - t4))
-    print(f"Time to compute: {runtime}")
+    print(f"Time to complete: {runtime}")
 
     # Did we compute the log_sf?
     if log_sf:
-        # If we did, take the exponent of the quantiles.
+        # Get the quantiles for both all and significant regressions.
         prob_ratio_ci = np.exp(
             np.quantile(theta_hat_b, [alpha, 0.25, 0.5, 0.75, 1 - alpha])
         )
+        prob_ratio_ci_sig = np.exp(
+            np.quantile(theta_hat_b_sig, [alpha, 0.25, 0.5, 0.75, 1 - alpha])
+        )
     else:
         prob_ratio_ci = np.quantile(theta_hat_b, [alpha, 0.25, 0.5, 0.75, 1 - alpha])
+        prob_ratio_ci_sig = np.quantile(
+            theta_hat_b_sig, [alpha, 0.25, 0.5, 0.75, 1 - alpha]
+        )
+    # Stack it.
+    prob_ratio_ci = np.vstack([prob_ratio_ci, prob_ratio_ci_sig])
     # How long did it take?
     runtime = time.strftime("%H:%M:%S", time.gmtime(time.time() - t0))
-    print(f"Time to compute: {runtime}")
+    print(f"Total runtime: {runtime}")
 
-    return prob_ratio_ci, theta_hat_b
+    return prob_ratio_ci, theta_hat_b_all

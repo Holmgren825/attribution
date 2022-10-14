@@ -1,3 +1,6 @@
+from functools import partial
+from multiprocessing import Pool
+
 import geopandas as gpd
 import iris
 import iris.analysis
@@ -10,6 +13,7 @@ import pandas as pd
 import statsmodels.api as sm
 from dask.distributed import get_client
 from iris.exceptions import CoordinateNotFoundError
+from tqdm.autonotebook import tqdm as tqdm_bar
 from tqdm.autonotebook import trange
 
 from attribution.config import init_config
@@ -431,7 +435,7 @@ def get_monthly_gmst(
     return gmst_data
 
 
-def compute_monthly_regression_coefs(cube, monthly_predictor):
+def compute_monthly_regression_coefs(cube, monthly_predictor, tqdm=False):
     """Compute the monthly regression coefficients.
 
     Argruments
@@ -440,6 +444,8 @@ def compute_monthly_regression_coefs(cube, monthly_predictor):
         Cube holding the data.
     monthly_predictor : np.ndarray
         Array of a predictor, with same length as the number of months in cube.
+    tqdm : bool, default: False
+        Show the tqdm progressbar.
 
     Returns
     -------
@@ -448,30 +454,66 @@ def compute_monthly_regression_coefs(cube, monthly_predictor):
     p_values : np.ndarray
         P-values for corresponding regression coefficients.
     """
+    shape = cube.shape
     # Get the median.
     monthly_data = cube.aggregated_by(
         ["year", "month_number"], iris.analysis.MEDIAN
     ).data
     # Group the data in months.
-    monthly_data = monthly_data.reshape(-1, 12)
+    monthly_data = monthly_data.reshape(shape[0], shape[1], -1, 12)
     monthly_predictor = monthly_predictor.reshape(-1, 12)
     # Somewhere to store the coefs.
-    betas = np.zeros((12))
-    p_values = np.zeros((12))
+    betas = np.zeros((shape[0], 12))
+    p_values = np.zeros((shape[0], 12))
 
-    # Loop over each month.
-    for i, (data_month, gmst_month) in enumerate(
-        zip(monthly_data.T, monthly_predictor.T)
+    # Loop over each realization and each month.
+    print("Monthly regression coefficents for all realisations")
+    for i, realisation in tqdm_bar(
+        enumerate(monthly_data[:, 0, ...]), total=shape[0], disable=not tqdm
     ):
-        # Add a constant to the predictor.
-        X = sm.add_constant(gmst_month)
-        # Fit the OLS.
-        res = sm.OLS(data_month, X).fit()
-        # Save the results.
-        betas[i] = res.params[-1]
-        p_values[i] = res.pvalues[-1]
+        for j, (data_month, gmst_month) in enumerate(
+            zip(realisation.T, monthly_predictor.T)
+        ):
+            # Add a constant to the predictor.
+            X = sm.add_constant(gmst_month)
+            # Fit the OLS.
+            res = sm.OLS(data_month, X).fit()
+            # Save the results.
+            betas[i, j] = res.params[-1]
+            p_values[i, j] = res.pvalues[-1]
 
+    assert np.all(p_values <= 1)
     return betas, p_values
+
+
+def _month_q_regression(realisation, monthly_predictor, quantiles, n_years):
+    """Small helper which can be distributed to multiple processors.."""
+    betas = np.zeros((12, 30))
+    pvalues = np.zeros((12, 30))
+    # We should not use all 2 dimensions if the realisation comes from a multicube.
+    # Since the three variants are equal at this point, it is enough to regress against one.
+    if len(realisation.shape) == 2:
+        realisation = realisation[0]
+
+    for month in range(12):
+        # Select monthly data.
+        constraint = iris.Constraint(month_number=month + 1)
+        # Double data since we dont care about the mask at this stage.
+        current_data = realisation.extract(constraint).data
+        # Reshape into year x days per month.
+        current_data = current_data.reshape(n_years, -1)
+        # What are the quantile values?
+        q_vals = np.quantile(current_data, quantiles, axis=1)
+        # Select the gmst series for that month.
+        X = monthly_predictor[:, month]
+        X = sm.add_constant(X)
+        # Compute the regression for every quantile.
+        for i in range(30):
+            res = sm.OLS(q_vals[i], X).fit()
+            betas[month, i] = res.params[-1]
+            pvalues[month, i] = res.pvalues[-1]
+
+    return [betas, pvalues]
 
 
 def compute_monthly_q_regression_coefs(cube, monthly_predictor, tqdm=False):
@@ -492,6 +534,7 @@ def compute_monthly_q_regression_coefs(cube, monthly_predictor, tqdm=False):
     p_values : np.ndarray
         P-values for corresponding regression coefficients.
     """
+    shape = cube.shape
     # How many years in the cube?
     n_years = (
         cube.coord("time").cell(-1).point.year
@@ -499,30 +542,37 @@ def compute_monthly_q_regression_coefs(cube, monthly_predictor, tqdm=False):
         + 1
     )
 
-    betas = np.zeros((12, 30))
-    pvalues = np.zeros((12, 30))
+    betas = np.zeros((shape[0], 12, 30))
+    pvalues = np.zeros((shape[0], 12, 30))
 
     # 30 quantiles between 0 and 1.
     quantiles = np.linspace(0, 1, num=30)
     # Do This for every month.
     monthly_predictor = monthly_predictor.reshape(-1, 12)
-    for month in trange(12, disable=not tqdm):
-        # Select monthly data.
-        constraint = iris.Constraint(month_number=month + 1)
-        # Double data since we dont care about the mask at this stage.
-        current_data = cube.extract(constraint).data.data
-        # Reshape into year x days per month.
-        current_data = current_data.reshape(n_years, -1)
-        # What are the quantile values?
-        q_vals = np.quantile(current_data, quantiles, axis=1)
-        # Select the gmst series for that month.
-        X = monthly_predictor[:, month]
-        X = sm.add_constant(X)
-        # Compute the regression for every quantile.
-        for i in range(30):
-            res = sm.OLS(q_vals[i], X).fit()
-            betas[month, i] = res.params[-1]
-            pvalues[month, i] = res.pvalues[-1]
+    print("Calculating monthly regression")
+    # Function to distribute the realisations.
+    ols_part = partial(
+        _month_q_regression,
+        monthly_predictor=monthly_predictor,
+        quantiles=quantiles,
+        n_years=n_years,
+    )
+
+    # Distribute on a pool.
+    with Pool() as p:
+        ols_results = list(
+            tqdm_bar(
+                p.imap(ols_part, cube.slices_over("realization_index")),
+                total=shape[0],
+                disable=not tqdm,
+            )
+        )
+    # We like arrays.
+    ols_results = np.asarray(ols_results)
+    betas = ols_results[:, 0, ...]
+    pvalues = ols_results[:, 1, ...]
+    # All pvalues should be below 1
+    assert np.all(pvalues <= 1)
 
     return betas, pvalues
 
@@ -595,31 +645,32 @@ def random_ts_from_windows(window_views, rng, n_resamples=1000):
     # Broadcast the windows to the number of resamples.
     window_views = np.broadcast_to(window_views, (n_resamples, n_years, window_size))
     # Sample the random column indices.
-    rand_cols = rng.integers(0, window_size - 1, (n_resamples, n_years, 1))
+    rand_cols = rng.integers(low=0, high=window_size, size=(n_resamples, n_years, 1))
     # Select data, remove axes of size 1.
     random_ts = np.take_along_axis(window_views, rand_cols, axis=2).squeeze()
 
     return random_ts
 
 
-def prepare_resampled_cubes(
-    resampled_data,
+def prepare_resampled_cube(
     orig_cube,
+    resampled_data,
     predictor,
     first_idx,
     last_idx,
     delta_temp=-1.0,
+    p_lim=0.05,
     quantile_shift=False,
     season=None,
 ):
-    """Calculate the probability ratio of an event using median scaling/shifting.
+    """Prepeare the resampled cube.
 
     Arguments
     ---------
-    resampled_data : np.ndarray
-        An numpy array holding a resampled version of the cube data.
     orig_cube : iris.cube.Cube
         Iris cube holding the original timeseries.
+    resampled_data : np.ndarray
+        An numpy array holding a resampled version of the cube data.
     predictor : np.ndarray
         Array of values used a predictor in the regression to the cube data.
     first_idx : int
@@ -628,6 +679,8 @@ def prepare_resampled_cubes(
         Index of last full year in reampled cube.
     delta_temp : float, default: -1.0
         Temperature difference used to shift the values using the regression coefficients.
+    p_lim : float, default: 0.05
+        Significance level for regression coefficients.
     quantile_shift : bool, default: False
         Whether to perform a quantile or median shift of the daily data.
     season : string
@@ -635,32 +688,72 @@ def prepare_resampled_cubes(
 
     Returns
     -------
-    cube, shifted_cube
+    resampled_cube
     """
 
     # If we have resampled data, we overwrite the cube data.
     # This assumes that the resampling is done correctly.
     if resampled_data is not None:
         cube = orig_cube.copy()
-        cube.data[first_idx:last_idx] = resampled_data
         cube = cube[first_idx:last_idx]
+        n_realisations = np.arange(resampled_data.shape[0])
+
     else:
         cube = orig_cube
+        resampled_data = cube.data
+        resampled_data = np.broadcast_to(
+            resampled_data.reshape(1, 1, -1), (1, 3, resampled_data.shape[0])
+        )
+        # This should be true.
+        assert np.all(np.equal(cube.data, resampled_data))
+        n_realisations = 1
+
+    # We create a new cube that can hold all realisations.
+    time_coord = cube.coord("time").copy()
+
+    # Coordinate for the realisations.
+    realisation_coord = iris.coords.AuxCoord(
+        n_realisations,
+        var_name="realization_index",
+        long_name="realization_index",
+    )
+    cube_type = iris.coords.AuxCoord(
+        ["orig", "non-sig", "sig"], var_name="type", long_name="type"
+    )
+
+    resampled_cube = iris.cube.Cube(
+        resampled_data,
+        standard_name="air_temperature",
+        long_name=cube.long_name,
+        var_name=cube.var_name,
+        units="K",
+        dim_coords_and_dims=[(time_coord, 2)],
+        aux_coords_and_dims=[(realisation_coord, 0), (cube_type, 1)],
+    )
+    iris.coord_categorisation.add_month_number(resampled_cube, "time")
+    iris.coord_categorisation.add_year(resampled_cube, "time")
 
     # How should we shift the cube data?
     if quantile_shift:
         # Get the monthly regression coefficients.
-        betas, _ = compute_monthly_q_regression_coefs(cube, predictor)
+        betas, p_values = compute_monthly_q_regression_coefs(
+            resampled_cube, predictor, tqdm=True
+        )
         # Shift the cube data.
-        shifted_cube = q_shift_cube_data(cube, betas, delta_temp)
+        resampled_cube = q_shift_cube_data(
+            resampled_cube, betas, p_values, delta_temp, p_lim=p_lim, tqdm=True
+        )
     else:
         # Get the monthly regression coefficients.
-        betas, _ = compute_monthly_regression_coefs(cube, predictor)
+        betas, p_values = compute_monthly_regression_coefs(
+            resampled_cube, predictor, tqdm=True
+        )
         # Shift the cube data.
-        shifted_cube = shift_cube_data(cube, betas, delta_temp)
+        resampled_cube = shift_cube_data(
+            resampled_cube, betas, p_values, delta_temp, p_lim=p_lim, tqdm=True
+        )
 
     if season is not None:
-        cube = select_season(cube, season, season)
-        shifted_cube = select_season(shifted_cube, season, season)
+        resampled_cube = select_season(resampled_cube, season, season)
 
-    return cube, shifted_cube
+    return resampled_cube
