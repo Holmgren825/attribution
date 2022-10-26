@@ -18,6 +18,7 @@ def plot_regression_map(
     p_lim=None,
     epsg=None,
     ax=None,
+    coord_names={"lat": "grid_latitude", "lon": "grid_longitude"},
 ):
     """Plot a regression map of the regression coefficents between cube variable and the predictor.
 
@@ -35,6 +36,8 @@ def plot_regression_map(
         EPSG code for custom plot projection.
     ax : matplotlib.axes.Axes
         Draw the plot on custom axes.
+    coord_names : dict, optional
+        Name of spatial coordinates in the cube.
     """
 
     if reg_coefs is None:
@@ -50,8 +53,8 @@ def plot_regression_map(
     reg_cube = Cube(
         reg_coefs,
         dim_coords_and_dims=[
-            (index_cube.coord("grid_latitude"), 0),
-            (index_cube.coord("grid_longitude"), 1),
+            (index_cube.coord(coord_names["lat"]), 0),
+            (index_cube.coord(coord_names["lon"]), 1),
         ],
     )
     # Was an axes passed?
@@ -69,15 +72,13 @@ def plot_regression_map(
     # Plot the cube. The CenteredNorm maps data to [0, 1] for the colormap,
     # where 0 of original data is mapped to 0.5, since we have a diverging cmap.
     iplt.contourf(reg_cube, norm=colors.CenteredNorm(), cmap=cmap, axes=ax)
-    # Add colorbar.
-    plt.colorbar()
     # Scatter confidence
     if p_lim is not None:
         # Get indices of significant values.
         y, x = np.argwhere(pvalues <= p_lim).T
         # Need their cooridnate values.
-        y = index_cube.coord("grid_latitude").points[..., y]
-        x = index_cube.coord("grid_longitude").points[..., x]
+        y = index_cube.coord(coord_names["lat"]).points[..., y]
+        x = index_cube.coord(coord_names["lon"]).points[..., x]
         # Scatter them
         coord_system = index_cube.coord_system().as_cartopy_projection()
         ax.scatter(

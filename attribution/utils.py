@@ -174,7 +174,12 @@ def get_country_shape(shapefile=None, country="Sweden"):
     return swe_shapes.iloc[0].geoms[0]
 
 
-def compute_cube_regression(cube, predictor, broadcast_coef=True):
+def compute_cube_regression(
+    cube,
+    predictor,
+    broadcast_coef=True,
+    coord_names={"lat": "grid_latitude", "lon": "grid_longitude"},
+):
     """Compute the regression coefficient between the data in cube and a predictor.
 
     Arguments
@@ -186,6 +191,8 @@ def compute_cube_regression(cube, predictor, broadcast_coef=True):
     broadcast_coef : bool, default: True
         Return the compressed regression coefficients, broadcasted so that there
         is one value per gridpoint and year.
+    coord_names : dict, optional
+        Name of spatial coordinates in the cube.
 
     Returns
     -------
@@ -245,8 +252,8 @@ def compute_cube_regression(cube, predictor, broadcast_coef=True):
     # If len is 3 we assume data is time, lat, lon.
     elif len(data.shape) == 3:
         # Shape
-        lat_shape = cube.coord("grid_latitude").shape[0]
-        lon_shape = cube.coord("grid_longitude").shape[0]
+        lat_shape = cube.coord(coord_names["lat"]).shape[0]
+        lon_shape = cube.coord(coord_names["lon"]).shape[0]
         # Store the results
         coefs = np.zeros((lat_shape, lon_shape))
         pvalues = np.zeros((lat_shape, lon_shape))
