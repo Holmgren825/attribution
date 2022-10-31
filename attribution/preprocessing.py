@@ -15,6 +15,7 @@ import iris.coord_categorisation
 import iris.util
 import iris_utils.utils
 import numpy as np
+from cf_units import Unit
 from dask.distributed import Client
 from iris.exceptions import CoordinateNotFoundError
 from iris.time import PartialDateTime
@@ -975,7 +976,7 @@ def prepare_slens_cube(
         return cube
 
 
-def prepare_pthbv(
+def prepare_pthbv_cube(
     path=None,
     filename=None,
     variable=None,
@@ -1030,12 +1031,15 @@ def prepare_pthbv(
     # Have to map the CF variable to the name used in pthbv
     if not variable:
         variable_cf = CFG["variable"]
-        if variable_cf == "pr":
-            variable = "_p_"
-        elif variable_cf == "tas":
-            variable = "_t_"
-        else:
-            raise ValueError("Variable not available.")
+    else:
+        variable_cf = variable
+    # Match the varible to pthbv names.
+    if variable_cf == "pr":
+        variable = "_p_"
+    elif variable_cf == "tas":
+        variable = "_t_"
+    else:
+        raise ValueError("Variable not available.")
 
     # Path to the data.
     if path is None:
@@ -1088,6 +1092,26 @@ def prepare_pthbv(
 
     cube = iris.util.mask_cube(cube, mask)
 
+    # Convert units of cube?
+    if variable_cf == "pr":
+        # PTHBV cube is in kg m-2 (for each day)
+        # We want it to be kg m-2 s-1, so have to divide by seconds per day.
+        cube.data = cube.core_data() / (24 * 60 * 60)
+        # Then we also have to change all the attributes of the cube.
+        # long_name, standarn_name, unit, variable. -> fetch these from GridClim.
+        cube.standard_name = "precipitation_flux"
+        cube.long_name = "Precipitation"
+        cube.var_name = variable_cf
+        cube.units = Unit("kg m-2 s-1")
+    else:
+        # Do nothing for temperature?
+        print("Temperature data is not converted.")
+        pass
+
+    # Realising the cube data before saving.
+    print("Realising cube, see progression in dask UI")
+    cube.data
+
     print("Saving cube")
     # Where to store the file
     if not project_path:
@@ -1096,8 +1120,7 @@ def prepare_pthbv(
     if not filename:
         filename = get_filename(cube, "pthbv", variable_cf, CFG)
     # Saving the prepared cubes.
-    with dask.config.set(scheduler="synchronous"):
-        iris.save(cube, os.path.join(project_path, filename))
+    iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
