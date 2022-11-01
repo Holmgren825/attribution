@@ -9,7 +9,6 @@ from functools import partial
 from multiprocessing import Pool
 
 import cartopy.crs as ccrs
-import dask
 import iris
 import iris.coord_categorisation
 import iris.util
@@ -265,6 +264,9 @@ def prepare_gridclim_cube(
 
     cube = iris.util.mask_cube(cube, mask)
 
+    print("Realising cube, see progression in dask UI")
+    cube.data
+
     print("Saving cube")
     # Where to store the file
     if not project_path:
@@ -273,8 +275,7 @@ def prepare_gridclim_cube(
     if not filename:
         filename = get_filename(cube, "gridclim", variable, CFG)
     # Saving the prepared cubes.
-    with dask.config.set(scheduler="synchronous"):
-        iris.save(cube, os.path.join(project_path, filename))
+    iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
     if return_cube:
         return cube
@@ -402,6 +403,9 @@ def prepare_eobs_cube(
     if roi_points:
         cube = region_selection(cube, roi_points)
 
+    print("Realising cube, see progression in dask UI")
+    cube.data
+
     print("Saving cube")
     # Where to store the file
     if not project_path:
@@ -410,8 +414,7 @@ def prepare_eobs_cube(
     if not filename:
         filename = get_filename(cube, "eobs", variable, CFG)
     # Saving the prepared cubes.
-    with dask.config.set(scheduler="synchronous"):
-        iris.save(cube, os.path.join(project_path, filename))
+    iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
@@ -539,6 +542,10 @@ def prepare_era5_cube(
 
     cube = region_selection(cube, roi_points)
 
+    # Realise data in the cube.
+    print("Realising cube, see progression in dask UI")
+    cube.data
+
     print("Saving cube")
     # Where to store the file
     if not project_path:
@@ -547,8 +554,7 @@ def prepare_era5_cube(
     if not filename:
         filename = get_filename(cube, "era5", variable, CFG)
     # Saving the prepared cubes.
-    with dask.config.set(scheduler="synchronous"):
-        iris.save(cube, os.path.join(project_path, filename))
+    iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
@@ -961,9 +967,11 @@ def prepare_slens_cube(
     cube = iris.cube.CubeList(cubes_outer)
     cube = cube.concatenate_cube()
 
+    del cubes_inner
+    del cubes_outer
     print("Realising cube, see progression in dask UI")
     # Realising the cube data before saving.
-    _ = cube.data
+    cube.data
     print("Saving cube")
     # Where to store the file
     if not project_path:
