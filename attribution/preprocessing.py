@@ -671,27 +671,12 @@ def prepare_cordex_cube(
         except CoordinateNotFoundError:
             pass
     # Now we should be able to merge the cubes along the new coordinate.
-    cube = iris_utils.merge_aeq_cubes(cube)
+    cube = iris_utils.utils.merge_aeq_cubes(cube)
     # Fix time coordinate
     # By now we should have all the correct data in the cube,
     # So we can simply replace the time coordinate to make sure they match,
     cube.remove_coord("time")
     cube.add_dim_coord(gc_cube.coord("time"), 1)
-
-    # Mask Sweden
-    # Create a mask.
-    # mask from shape cant handle the 4d cube so we have to do this manually for now.
-    mask = iris_utils.utils.mask_from_shape(
-        cube[0, :, :, :],
-        swe_mainland,
-        coord_names=("grid_latitude", "grid_longitude"),
-    )
-
-    # Broadcast along the fourth dimension (ensemble_id).
-    mask = np.broadcast_to(mask, cube.shape)
-
-    # Mask the cube.
-    cube = iris.util.mask_cube(cube, mask)
 
     # Check if grid points are almost equal
     lats = np.all(
@@ -731,6 +716,25 @@ def prepare_cordex_cube(
         # Select the region.
         cube = region_selection(cube, roi_points)
 
+    # Realise data in the cube.
+    # For some reason we have to do this before masking.
+    print("Realising cube, see progression in dask UI")
+    cube.data
+    # Mask Sweden
+    # Create a mask.
+    # mask from shape cant handle the 4d cube so we have to do this manually for now.
+    mask = iris_utils.utils.mask_from_shape(
+        cube[0, :, :, :],
+        swe_mainland,
+        coord_names=("grid_latitude", "grid_longitude"),
+    )
+
+    # Broadcast along the fourth dimension (ensemble_id).
+    mask = np.broadcast_to(mask, cube.shape)
+
+    # Mask the cube.
+    cube = iris.util.mask_cube(cube, mask)
+
     print("Saving cube")
     # Where to store the file
     if not project_path:
@@ -739,8 +743,7 @@ def prepare_cordex_cube(
     if not filename:
         filename = get_filename(cube, "cordex", variable, CFG)
     # Saving the prepared cubes.
-    with dask.config.set(scheduler="synchronous"):
-        iris.save(cube, os.path.join(project_path, filename))
+    iris.save(cube, os.path.join(project_path, filename))
     print("Finished")
 
     if return_cube:
