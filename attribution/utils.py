@@ -212,6 +212,7 @@ def compute_cube_regression(
         res = sm.OLS(data, X).fit()
         coefs = res.params[-1]
         pvalues = res.pvalues[-1]
+        conf_int = res.conf_int()
 
         # This returns the compressed and broadcasted array.
         if broadcast_coef:
@@ -221,7 +222,7 @@ def compute_cube_regression(
             return coefs
         else:
             # If not, we return the masked arrays.
-            return coefs, pvalues
+            return coefs, pvalues, conf_int
 
     # If cube is 2d we assume it is an ensemble cube, so dims are ens_id, time
     elif len(data.shape) == 2:

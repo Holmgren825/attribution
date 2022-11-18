@@ -47,6 +47,7 @@ def _boot_helper(
     predictor,
     threshold_quantile,
     delta_temp,
+    reg_coef,
     p_lim,
     dists,
     log_sf=True,
@@ -58,12 +59,17 @@ def _boot_helper(
     fit = dist.fit(data)
     # Get the threshold through the inverse survival funciton.
     threshold = dist.isf(threshold_quantile, *fit)
-    # Calculate regression slope and the significance of the regression.
-    reg_coef, p_value = compute_cube_regression(data, predictor, broadcast_coef=False)
+    # Check if reg_coef is None.
+    # This is not the case if the submitted data is detrended.
+    if reg_coef is None:
+        # Calculate regression slope and the significance of the regression.
+        reg_coef, p_value, _ = compute_cube_regression(
+            data, predictor, broadcast_coef=False
+        )
 
-    # If the p-values is above the threshold, we set the reg_coef to 0.
-    if p_value > p_lim:
-        reg_coef = 0
+        # If the p-value is above the threshold, we set the reg_coef to 0.
+        if p_value > p_lim:
+            reg_coef = 0
     # Calculate the ratio.
     prob_ratio = calc_prob_ratio(
         data=data,
@@ -85,6 +91,7 @@ def prob_ratio_ci(
     dists,
     predictor=None,
     ensemble=False,
+    detrend=False,
     window_size=5,
     alpha=0.05,
     p_lim=0.05,
@@ -110,6 +117,8 @@ def prob_ratio_ci(
         Dictionary of scipy.stats.rv_continous which are evaluated against the resampled datasets.
     ensemble : bool, default: True
         Is the provided data an ensemble.
+    detrend : bool, default: False
+        Whether the input data should be detrended, i.e. all years are shifted to the event year.
     alpha : float, default: 0.05
         Confidence level of the probability ratio.
     p_lim : float, default: 0.05
@@ -141,17 +150,42 @@ def prob_ratio_ci(
     # Do we have a predictor?
     if predictor is None:
         predictor = get_gmst(cube)
+    # Should we remove the trend from the data?
+    if detrend:
+        # Do we have ensemble data?
+        if not ensemble:
+            reg_coef, _, _ = compute_cube_regression(
+                data, predictor, broadcast_coef=False
+            )
+        else:
+            reg_coef = np.zeros(data.shape[0])
+            for i, member in enumerate(data):
+                reg_coef[i], _, _ = compute_cube_regression(
+                    member, predictor, broadcast_coef=False
+                )
+        # We de-trend the data by using the linear regression and the difference in GMST between the year and the last year in the ds.
+        # Hence, the last year in the dataset will have a diff. of 0.
+        # TODO Maybe not hard code to last value here?
+        gmst_diff = predictor[-1] - predictor
+        data = data + reg_coef.reshape(-1, 1) * gmst_diff.T
+        data = data.squeeze()
+    else:
+        reg_coef = None
     # We know how many results we need.
     if not ensemble:
         # Generate all the resamples before the loop.
-        # This is essentially an random resample with replacement,
-        # but kind of maintains the trend. We can only resample
-        # each year from within a window.
-        data_windows = sliding_window_view(data, window_size)
-        # Select random data from the windows.
-        data = random_ts_from_windows(data_windows, rng, n_resamples=n_resamples)
-        # We have to shorten the predictor.
-        predictor = predictor[: data_windows.shape[0]]
+        if not detrend:
+            # This is essentially an random resample with replacement,
+            # but kind of maintains the trend. We can only resample
+            # each year from within a window.
+            data_windows = sliding_window_view(data, window_size)
+            # Select random data from the windows.
+            data = random_ts_from_windows(data_windows, rng, n_resamples=n_resamples)
+            # We have to shorten the predictor.
+            predictor = predictor[: data_windows.shape[0]]
+        # If we have detrended data we don't have to care about windowed resampling.
+        else:
+            data = rng.choice(data, size=(n_resamples, data.shape[0]))
 
     # Initiate a partial _boot_helper.
     boot_helper_p = partial(
@@ -159,6 +193,7 @@ def prob_ratio_ci(
         predictor=predictor,
         threshold_quantile=threshold_quantile,
         delta_temp=delta_temp,
+        reg_coef=reg_coef,
         p_lim=p_lim,
         dists=dists,
         log_sf=log_sf,
