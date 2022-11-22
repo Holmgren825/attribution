@@ -247,7 +247,7 @@ def prepare_gridclim_cube(
 
     # Any roi_poins?
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
     # If we have roi points by now, extract them.
     # If False, no selection is done.
     if roi_points:
@@ -397,7 +397,7 @@ def prepare_eobs_cube(
 
     # Any roi points?
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
 
     # If False we don't extract.
     if roi_points:
@@ -534,7 +534,7 @@ def prepare_era5_cube(
 
     # Any roi points?
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
 
     # If False we don't extract.
     if roi_points:
@@ -716,7 +716,7 @@ def prepare_cordex_cube(
 
     # If region of interest is None, parse it.
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
 
     if roi_points:
         # Select the region.
@@ -850,7 +850,7 @@ def load_slens_member(
 
     # If region of interest is None, parse it.
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
 
     if roi_points:
         region_constraint = iris.Constraint(
@@ -930,7 +930,7 @@ def prepare_slens_cube(
 
     # If region of interest is None, parse it.
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
     # Load every ensemble member as a single cube and merge in chunks of 10.
     # Merging the chunk reduces the memory use quite a bit.
     cubes_outer = []
@@ -1080,7 +1080,7 @@ def prepare_pthbv_cube(
 
     # Non default roi points?
     if roi_points is None:
-        roi_points = list(CFG["roi_mask"].values())
+        roi_points = list(CFG["roi_extent"].values())
     # Only extract if we by now have roi points.
     if roi_points:
         cube = region_selection(
